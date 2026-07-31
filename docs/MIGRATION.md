@@ -172,13 +172,29 @@ Nightly restic `CronJob`, in order of criticality:
 
 Blocked on phase 0 hardware. Everything above is pure git and needs no server.
 
+### 9a — Platform, no radio required
+
+The Zigbee patch is disabled (see the PHASE 0 block in
+`k8s/overlays/prod/kustomization.yaml`), so all of this can be done before the
+dongle is fitted. Answer "is the platform working" before introducing "is the
+radio working" — then a failure points at one or the other, not both.
+
 - [ ] MicroK8s installed; `hostpath-storage` + `dns` enabled, `ingress` **not**
 - [ ] Sealed Secrets controller; real secrets sealed and committed
+- [ ] Argo CD repo credential added (deploy key)
 - [ ] Argo CD core installed, both Applications registered
-- [ ] First sync of `ha-prod`
-- [ ] Zigbee dongle paired, ZHA coordinator online
+- [ ] First sync of `ha-prod`; Home Assistant answers on `:8123`
+- [ ] Recorder confirmed on Postgres — **no `home-assistant_v2.db` in `/config`**
 - [ ] Grafana Cloud stack created, first metrics flowing
 - [ ] **Restore drill executed successfully**
+
+### 9b — Radio, once the dongle is fitted
+
+- [ ] Dongle in a **USB 2.0** port on an extension cable
+- [ ] Real `/dev/serial/by-id/` path in `patches/zigbee-device.yaml`
+- [ ] Zigbee patch re-enabled in `k8s/overlays/prod/kustomization.yaml`
+- [ ] ZHA added in the UI, coordinator online
+- [ ] First device paired
 
 ---
 

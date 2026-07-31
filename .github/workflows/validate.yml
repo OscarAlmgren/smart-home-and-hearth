@@ -88,6 +88,16 @@ jobs:
             exit 1
           fi
 
+          # The Zigbee patch is disabled during phase 0, so REPLACE_ME should
+          # never reach a built manifest. If it does, someone enabled the patch
+          # without filling in the real device path — which would leave the pod
+          # stuck in ContainerCreating on a hostPath type check, with a message
+          # that does not obviously point back here.
+          if grep -q "REPLACE_ME" "$m"; then
+            echo "::error::Zigbee device patch is enabled but still contains REPLACE_ME. Run 'ls -l /dev/serial/by-id/' on the server and put the real path in k8s/overlays/prod/patches/zigbee-device.yaml"
+            exit 1
+          fi
+
   secrets-scan:
     name: No plaintext secrets
     runs-on: ubuntu-latest

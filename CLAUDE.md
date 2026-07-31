@@ -28,6 +28,10 @@ slow to diagnose.
 - **Serial devices are referenced by `/dev/serial/by-id/`, never `/dev/ttyACM0`.**
   Kernel enumeration order changes across reboots and will silently point Home
   Assistant at the wrong radio.
+- **The Zigbee patch is currently disabled** (`patches: []` in
+  `k8s/overlays/prod/kustomization.yaml`) because the dongle is not yet fitted.
+  Do not re-enable it without a real `/dev/serial/by-id/` path — CI fails the
+  build if `REPLACE_ME` reaches a rendered manifest.
 - **No CPU limit on the Home Assistant container.** The node has 2 slow cores;
   CFS throttling makes the UI unusable. Memory limits only.
 - **`.env.dev`, `.env.test` and `.env.prod` are tracked in git.** Only bare

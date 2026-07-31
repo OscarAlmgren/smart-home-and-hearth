@@ -29,5 +29,34 @@ configMapGenerator:
     envs:
       - ../../../.env.prod
 
-patches:
-  - path: patches/zigbee-device.yaml
+patches: []
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PHASE 0 — THE ZIGBEE RADIO IS NOT ATTACHED YET.
+  #
+  # The dongle patch is disabled so the platform can be brought up and verified
+  # without hardware. The base leaves the volume at `/dev/null` with an
+  # unvalidated hostPath type, which mounts cleanly and lets Home Assistant
+  # start normally — it simply has no radio, which is correct for now.
+  #
+  # ── TO ENABLE THE RADIO ────────────────────────────────────────────────────
+  #
+  #   1. Plug the dongle into a USB 2.0 port on an extension cable
+  #      (USB 3.0 emits 2.4 GHz noise that wrecks Zigbee — docs/hardware.md).
+  #
+  #   2. Find its stable path on the server:
+  #          ls -l /dev/serial/by-id/
+  #
+  #   3. Put that path into patches/zigbee-device.yaml, replacing REPLACE_ME.
+  #
+  #   4. Replace `patches: []` above with:
+  #          patches:
+  #            - path: patches/zigbee-device.yaml
+  #
+  #   5. Commit, promote dev -> test -> main, let Argo CD sync, then add the
+  #      ZHA integration in the Home Assistant UI.
+  #
+  # CI fails the build if the patch is enabled while REPLACE_ME is still in
+  # place, so you cannot half-do this. Once enabled, the hostPath type is
+  # CharDevice, meaning the pod refuses to start if the dongle is absent —
+  # deliberate, so a missing radio is loud rather than silent.
+  # ═══════════════════════════════════════════════════════════════════════════
