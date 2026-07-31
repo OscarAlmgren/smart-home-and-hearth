@@ -1,0 +1,183 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homeassistant
+  labels:
+    app.kubernetes.io/name: homeassistant
+spec:
+  replicas: 1
+
+  # LOAD-BEARING. Do not change to RollingUpdate.
+  #
+  # A rolling update starts the new pod before terminating the old one. Both
+  # would try to bind host :8123 (hostNetwork) and open the same serial device,
+  # so the new pod crash-loops while the old one is never drained. The
+  # deployment wedges and Home Assistant stays on the old version silently.
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: homeassistant
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: homeassistant
+    spec:
+      # mDNS, SSDP and DHCP discovery all rely on broadcast/multicast traffic
+      # that a pod-networked container never sees. Chromecast, Sonos, HomeKit
+      # and most "it just appeared in the UI" integrations need this.
+      hostNetwork: true
+      # With hostNetwork the pod would otherwise inherit the host's resolver and
+      # lose cluster DNS — which it needs to resolve the postgres Service.
+      dnsPolicy: ClusterFirstWithHostNet
+
+      nodeSelector:
+        # The Zigbee dongle is physically attached to this node. Patched per
+        # environment; only prod actually schedules a pod.
+        kubernetes.io/hostname: henrybook
+
+      # Home Assistant flushes the recorder and unloads integrations on
+      # shutdown. On a 1.65 GHz Bobcat that is not instant, and SIGKILLing it
+      # mid-write is how databases get corrupted.
+      terminationGracePeriodSeconds: 60
+
+      securityContext:
+        fsGroup: 0
+
+      initContainers:
+        # Copies the git-managed config into the PVC on every start, so a
+        # commit to this repo is what changes the running configuration.
+        #
+        # Reuses the Home Assistant image rather than pulling busybox — the
+        # image is already on the node, and on a 12 GiB disk an extra image is
+        # a real cost.
+        - name: sync-config
+          image: ghcr.io/home-assistant/home-assistant:2026.7.4
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-eu", "-c"]
+          args:
+            - |
+              echo "==> syncing git-managed config into /config"
+
+              # Git owns these. Overwrite unconditionally.
+              cp -f /managed/configuration.yaml /config/configuration.yaml
+
+              # Clear packages/ first so a package deleted in git actually
+              # disappears from the running config, rather than lingering
+              # forever because nothing ever removes it.
+              mkdir -p /config/packages
+              rm -f /config/packages/*.yaml
+              cp -f /managed-packages/*.yaml /config/packages/
+
+              # Home Assistant's UI editors WRITE these files. Copying over
+              # them on every restart would silently delete every automation,
+              # script and scene created through the UI. Seed them only if
+              # absent (-n = no clobber).
+              cp -n /managed/automations.yaml /config/automations.yaml || true
+              cp -n /managed/scripts.yaml     /config/scripts.yaml     || true
+              cp -n /managed/scenes.yaml      /config/scenes.yaml      || true
+
+              cp -f /managed-secrets/secrets.yaml /config/secrets.yaml
+              chmod 600 /config/secrets.yaml
+
+              echo "==> done"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - { name: config, mountPath: /config }
+            - { name: managed, mountPath: /managed, readOnly: true }
+            - { name: managed-packages, mountPath: /managed-packages, readOnly: true }
+            - { name: managed-secrets, mountPath: /managed-secrets, readOnly: true }
+
+      containers:
+        - name: homeassistant
+          image: ghcr.io/home-assistant/home-assistant:2026.7.4
+          imagePullPolicy: IfNotPresent
+
+          securityContext:
+            # Required for serial device access. A targeted capability set is
+            # not sufficient: Home Assistant's usb/bluetooth discovery walks
+            # sysfs paths that are masked in an unprivileged container.
+            privileged: true
+
+          env:
+            - name: TZ
+              valueFrom:
+                configMapKeyRef:
+                  name: ha-env
+                  key: TZ
+
+          ports:
+            - name: http
+              containerPort: 8123
+              protocol: TCP
+
+          # Home Assistant's first boot installs Python dependencies for every
+          # discovered integration. On this CPU that can take several minutes,
+          # and a normal livenessProbe would kill it in a loop before it ever
+          # finishes. startupProbe gives it up to 10 minutes; liveness only
+          # engages once startup has succeeded.
+          startupProbe:
+            httpGet: { path: /, port: 8123 }
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /, port: 8123 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: { path: /, port: 8123 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              # DELIBERATELY NO CPU LIMIT. The node has 2 slow cores; CFS
+              # throttling makes the UI unusable and startup pathologically
+              # long. Memory limit only.
+              memory: 1536Mi
+
+          volumeMounts:
+            - { name: config, mountPath: /config }
+            - { name: zigbee, mountPath: /dev/zigbee }
+            # Home Assistant reads /etc/localtime in addition to TZ.
+            - { name: localtime, mountPath: /etc/localtime, readOnly: true }
+
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: ha-config
+        - name: managed
+          configMap:
+            name: ha-config-files
+        - name: managed-packages
+          configMap:
+            name: ha-packages
+        - name: managed-secrets
+          secret:
+            secretName: ha-secrets
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: zigbee
+          hostPath:
+            # Patched per environment. MUST be a /dev/serial/by-id/ path —
+            # /dev/ttyACM0 is assigned in kernel enumeration order and will
+            # eventually point at a different radio after a reboot, at which
+            # point ZHA silently fails to find its coordinator.
+            #
+            # Find the real path with: ls -l /dev/serial/by-id/
+            path: /dev/null
+            type: ""

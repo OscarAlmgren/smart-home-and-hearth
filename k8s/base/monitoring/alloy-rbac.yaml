@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+---
+# Cluster-scoped because Alloy discovers nodes and scrapes the kubelet's
+# cAdvisor endpoint through the API server proxy. Read-only throughout.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/proxy      # cAdvisor metrics via the API server
+      - nodes/metrics
+      - services
+      - endpoints
+      - pods
+      - pods/log         # loki.source.kubernetes reads container stdout
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alloy
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    # Kustomize rewrites this to the overlay's namespace. ClusterRoleBinding
+    # subjects need an explicit namespace because the binding itself is
+    # cluster-scoped.
+    namespace: ha-base

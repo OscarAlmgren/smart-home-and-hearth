@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Monitoring: one Alloy collector plus kube-state-metrics. Roughly 300 Mi
+# combined. See docs/grafana-cloud.md for the setup walkthrough.
+#
+# Included by each overlay rather than by ../kustomization.yaml, so it can be
+# dropped from an environment without editing the base.
+
+resources:
+  - alloy-rbac.yaml
+  - alloy-deployment.yaml
+  - kube-state-metrics.yaml
+
+configMapGenerator:
+  # Generated rather than written inline so the ConfigMap name carries a
+  # content hash. That hash is what rolls the Alloy pod when the config
+  # changes — Alloy hot-reloads on SIGHUP, but nothing here sends one, so
+  # without the hash a config commit would update the ConfigMap and never take
+  # effect.
+  - name: alloy-config
+    files:
+      - config.alloy

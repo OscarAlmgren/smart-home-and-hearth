@@ -1,28 +1,41 @@
 #!/usr/bin/env bash
-# Pull the latest config from git and (re)start Home Assistant via Docker Compose.
-# Run this on the Ubuntu server, from anywhere: it cd's to the repo root itself.
+# DEPRECATED. Deploys are GitOps now — this script no longer does anything.
+#
+# It used to `git pull && docker compose up -d` on the server. Running that
+# today would start a second Home Assistant in Docker, competing with the
+# Kubernetes pod for host :8123 and the Zigbee dongle. Whichever won would be
+# unclear, and the symptoms confusing.
+#
+# Kept as a refusing stub rather than deleted, because it was the muscle-memory
+# command for months.
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cat >&2 <<'EOF'
 
-if [ ! -f .env ]; then
-  echo "==> No .env found. Copy .env.example to .env and set it up first." >&2
-  exit 1
-fi
+  scripts/deploy.sh is deprecated and does nothing.
 
-if [ ! -f config/secrets.yaml ]; then
-  echo "==> No config/secrets.yaml found. Copy config/secrets.yaml.example and fill it in first." >&2
-  exit 1
-fi
+  Deployment is now GitOps. Argo CD watches this repository and syncs `main`
+  to the ha-prod namespace automatically.
 
-echo "==> Pulling latest config from git..."
-git pull --ff-only
+  To ship a change:
 
-echo "==> Pulling latest container image..."
-docker compose pull
+      git switch dev
+      # edit config/ or k8s/
+      ./scripts/render-env.sh --check
+      git commit -am "..." && git push
 
-echo "==> Starting Home Assistant..."
-docker compose up -d
+      # then open PRs: dev -> test -> main
+      # Argo CD applies main within ~3 minutes
 
-echo "==> Done. Tailing logs (Ctrl+C to stop tailing; container keeps running)..."
-docker compose logs -f --tail=50
+  To see what is deployed right now:
+
+      export ARGOCD_OPTS='--core'
+      argocd app get ha-prod
+      argocd app diff ha-prod
+      kubectl -n ha-prod get pods
+
+  Full workflow:      docs/lcm.md
+  Cluster bring-up:   docs/microk8s-bootstrap.md
+
+EOF
+exit 1

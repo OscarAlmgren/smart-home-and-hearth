@@ -1,0 +1,36 @@
+# Home Assistant at replicas: 0 in the test environment.
+#
+# This is the whole trick that makes a three-environment model viable on a
+# 2-core, 6 GiB thin client.
+#
+# The manifests ARE genuinely applied to the API server, so you get real
+# validation that static tools cannot give you: admission controllers, Pod
+# Security enforcement, CRD and schema checks, immutable-field conflicts
+# against the previously applied version. But nothing is ever scheduled, so it
+# costs no CPU and no memory, and because hostpath PVCs bind
+# WaitForFirstConsumer, no disk either.
+#
+# It also keeps test off host :8123, which prod owns exclusively.
+#
+# To smoke-test a change for real:
+#     kubectl -n ha-test scale deploy/homeassistant --replicas=1
+#     # ... check it, then put it back ...
+#     kubectl -n ha-test scale deploy/homeassistant --replicas=0
+#
+# Leaving it at 1 will contend with prod for the host port and the Zigbee
+# dongle. Put it back.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homeassistant
+spec:
+  replicas: 0
+---
+# Postgres too — no point running a database for a Home Assistant that is not
+# running.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  replicas: 0

@@ -1,0 +1,208 @@
+---
+# Hardware Profile: HP t610 Thin Client
+system:
+  description: "HP t610 WW Thin Client (B8C95AA#ABD)"
+  class: "system"
+  hw_path: ""
+  
+  components:
+    bus_root:
+      hw_path: "/0"
+      class: "bus"
+      description: "17E2"
+      
+      firmware:
+        hw_path: "/0/0"
+        class: "memory"
+        description: "64KiB BIOS"
+        
+      memory:
+        hw_path: "/0/5"
+        class: "memory"
+        description: "6GiB System Memory"
+        banks:
+          - hw_path: "/0/5/0"
+            class: "memory"
+            description: "2GiB DIMM DDR3 Synchronous 533 MHz (1.9 ns)"
+          - hw_path: "/0/5/1"
+            class: "memory"
+            description: "4GiB DIMM DDR3 Synchronous 800 MHz (1.2 ns)"
+            
+      cache:
+        - hw_path: "/0/11"
+          class: "memory"
+          description: "128KiB L1 cache"
+        - hw_path: "/0/12"
+          class: "memory"
+          description: "1MiB L2 cache"
+          
+      processor:
+        hw_path: "/0/17"
+        class: "processor"
+        description: "AMD G-T56N Processor"
+        
+      root_complex:
+        hw_path: "/0/100"
+        class: "bridge"
+        description: "Family 14h Processor Root Complex"
+        
+        peripherals:
+          display:
+            hw_path: "/0/100/1"
+            class: "display"
+            device_node: "/dev/fb0"
+            description: "Wrestler [Radeon HD 6320]"
+            
+          multimedia:
+            - hw_path: "/0/100/1.1"
+              class: "multimedia"
+              device: "card0"
+              description: "Wrestler HDMI Audio"
+              inputs:
+                - hw_path: "/0/100/1.1/0"
+                  class: "input"
+                  device: "input10"
+                  description: "HD-Audio Generic HDMI/DP,pcm=3"
+            - hw_path: "/0/100/14.2"
+              class: "multimedia"
+              device: "card1"
+              description: "SBx00 Azalia (Intel HDA)"
+              inputs:
+                - hw_path: "/0/100/14.2/0"
+                  class: "input"
+                  device: "input11"
+                  description: "HDA ATI SB Mic"
+                - hw_path: "/0/100/14.2/1"
+                  class: "input"
+                  device: "input12"
+                  description: "HDA ATI SB Headphone"
+
+          storage_controller:
+            hw_path: "/0/100/11"
+            class: "storage"
+            device: "scsi1"
+            description: "SB7x0/SB8x0/SB9x0 SATA Controller [IDE mode]"
+            disks:
+              - hw_path: "/0/100/11/0.0.0"
+                class: "disk"
+                device_node: "/dev/sda"
+                description: "16GB 16GB SATA Flash"
+                volumes:
+                  - hw_path: "/0/100/11/0.0.0/1"
+                    class: "volume"
+                    device_node: "/dev/sda1"
+                    description: "710MiB Windows FAT volume"
+                  - hw_path: "/0/100/11/0.0.0/2"
+                    class: "volume"
+                    device_node: "/dev/sda2"
+                    description: "1792MiB EXT4 volume"
+                  - hw_path: "/0/100/11/0.0.0/3"
+                    class: "volume"
+                    device_node: "/dev/sda3"
+                    description: "12GiB EFI partition"
+
+          usb_controllers:
+            - hw_path: "/0/100/12"
+              class: "bus"
+              description: "SB7x0/SB8x0/SB9x0 USB OHCI0 Controller"
+              buses:
+                - hw_path: "/0/100/12/1"
+                  class: "bus"
+                  device: "usb1"
+                  description: "OHCI PCI host controller"
+                  inputs:
+                    - hw_path: "/0/100/12/1/4"
+                      class: "input"
+                      device: "input13"
+                      description: "PixArt HP 100 105 USB Optical Mouse"
+            - hw_path: "/0/100/12.2"
+              class: "bus"
+              description: "SB7x0/SB8x0/SB9x0 USB EHCI Controller"
+              buses:
+                - hw_path: "/0/100/12.2/1"
+                  class: "bus"
+                  device: "usb2"
+                  description: "EHCI Host Controller"
+            - hw_path: "/0/100/14"
+              class: "bus"
+              description: "SBx00 SMBus Controller"
+
+          lpc_interface:
+            hw_path: "/0/100/14.3"
+            class: "bridge"
+            description: "SB7x0/SB8x0/SB9x0 LPC host controller"
+            devices:
+              - hw_path: "/0/100/14.3/0"
+                class: "input"
+                description: "PnP device PNP0303"
+              - hw_path: "/0/100/14.3/1"
+                class: "input"
+                description: "PnP device PNP0f03"
+              - hw_path: "/0/100/14.3/2"
+                class: "system"
+                description: "PnP device PNP0b00"
+              - hw_path: "/0/100/14.3/3"
+                class: "communication"
+                description: "PnP device PNP0501"
+              - hw_path: "/0/100/14.3/4"
+                class: "communication"
+                description: "PnP device PNP0501"
+              - hw_path: "/0/100/14.3/5"
+                class: "printer"
+                description: "PnP device PNP0401"
+
+          pcie_bridges:
+            - hw_path: "/0/100/14.4"
+              class: "bridge"
+              description: "SBx00 PCI to PCI Bridge"
+            - hw_path: "/0/100/15"
+              class: "bridge"
+              description: "SB700/SB800/SB900 PCI to PCI bridge (PCIE port 0)"
+            - hw_path: "/0/100/15.2"
+              class: "bridge"
+              description: "SB900 PCI to PCI bridge (PCIE port 2)"
+              network:
+                hw_path: "/0/100/15.2/0"
+                class: "network"
+                interface: "enp3s0"
+                description: "NetLink BCM57781 Gigabit Ethernet PCIe"
+            - hw_path: "/0/100/15.3"
+              class: "bridge"
+              description: "SB900 PCI to PCI bridge (PCIE port 3)"
+              usb_3_host:
+                hw_path: "/0/100/15.3/0"
+                class: "bus"
+                description: "TUSB73x0 SuperSpeed USB 3.0 xHCI Host Controller"
+                buses:
+                  - hw_path: "/0/100/15.3/0/0"
+                    class: "bus"
+                    device: "usb3"
+                    description: "xHCI Host Controller"
+                  - hw_path: "/0/100/15.3/0/1"
+                    class: "bus"
+                    device: "usb4"
+                    description: "xHCI Host Controller"
+
+      processor_functions:
+        - { hw_path: "/0/101", class: "bridge", description: "Family 12h/14h Processor Function 0" }
+        - { hw_path: "/0/102", class: "bridge", description: "Family 12h/14h Processor Function 1" }
+        - { hw_path: "/0/103", class: "bridge", description: "Family 12h/14h Processor Function 2" }
+        - { hw_path: "/0/104", class: "bridge", description: "Family 12h/14h Processor Function 3" }
+        - { hw_path: "/0/105", class: "bridge", description: "Family 12h/14h Processor Function 4" }
+        - { hw_path: "/0/106", class: "bridge", description: "Family 12h/14h Processor Function 6" }
+        - { hw_path: "/0/107", class: "bridge", description: "Family 12h/14h Processor Function 5" }
+        - { hw_path: "/0/108", class: "bridge", description: "Family 12h/14h Processor Function 7" }
+
+  chassis_inputs:
+    - hw_path: "/1"
+      class: "input"
+      device: "input0"
+      description: "Power Button"
+    - hw_path: "/2"
+      class: "input"
+      device: "input1"
+      description: "Power Button"
+    - hw_path: "/3"
+      class: "input"
+      device: "input9"
+      description: "HP WMI hotkeys"

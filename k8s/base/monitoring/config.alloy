@@ -1,0 +1,241 @@
+// ═════════════════════════════════════════════════════════════════════════
+// Grafana Alloy — single collector for the whole node.
+//
+// Everything is scraped locally and pushed OUT to Grafana Cloud. Nothing
+// listens for inbound connections and there is no local Prometheus, Loki or
+// Grafana — which is both the secure arrangement and the only one that fits in
+// 6 GiB alongside Home Assistant.
+//
+// Deliberately hand-written instead of using Grafana's k8s-monitoring Helm
+// chart: that chart (v3+) deploys an Alloy Operator plus separate Alloy
+// instances for metrics, logs, profiles and receivers. Correct on a real
+// cluster, roughly 5x the footprint this node can afford.
+//
+// THE FREE TIER ALLOWS 10,000 ACTIVE SERIES. Every scrape below is filtered
+// with that budget in mind. See docs/grafana-cloud.md.
+// ═════════════════════════════════════════════════════════════════════════
+
+// ─── Sinks ───────────────────────────────────────────────────────────────
+
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GC_PROM_URL")
+    basic_auth {
+      username = sys.env("GC_PROM_USER")
+      password = sys.env("GC_API_TOKEN")
+    }
+    // Small queue: 2 cores and a domestic uplink. More shards would add memory
+    // pressure without improving throughput.
+    queue_config {
+      capacity             = 2500
+      max_shards           = 2
+      max_samples_per_send = 500
+    }
+  }
+  // The WAL buffers samples while Grafana Cloud is unreachable. Truncate
+  // aggressively — on a 12 GiB disk an unbounded WAL is a real risk.
+  wal {
+    truncate_frequency = "1h"
+  }
+}
+
+loki.write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GC_LOKI_URL")
+    basic_auth {
+      username = sys.env("GC_LOKI_USER")
+      password = sys.env("GC_API_TOKEN")
+    }
+  }
+}
+
+// ─── Series budget gate ──────────────────────────────────────────────────
+// Everything funnels through here. Drops exporter self-telemetry — useless for
+// a home install, and thousands of series.
+
+prometheus.relabel "budget" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "go_.*|promhttp_.*|process_.*|scrape_series_added|scrape_sample_limit"
+    action        = "drop"
+  }
+}
+
+// ─── Host metrics ────────────────────────────────────────────────────────
+// Alloy's built-in unix exporter. Using this instead of a separate
+// node-exporter DaemonSet saves an image (~30 MB of a 12 GiB disk) and a pod.
+//
+// set_collectors is an explicit allowlist, NOT an addition to the defaults.
+// The full default set emits several thousand series; this is the subset that
+// answers real questions on this box.
+
+prometheus.exporter.unix "node" {
+  rootfs_path = "/host/root"
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+
+  set_collectors = [
+    "cpu",
+    "diskstats",
+    "filesystem",   // <- the important one: root fs fill level
+    "loadavg",
+    "meminfo",
+    "netdev",
+    "stat",
+    "uname",
+  ]
+
+  filesystem {
+    mount_points_exclude = "^/(dev|proc|sys|run|var/lib/kubelet/.+|var/snap/.+|snap/.+)($|/)"
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+  }
+}
+
+prometheus.scrape "node" {
+  targets         = prometheus.exporter.unix.node.targets
+  forward_to      = [prometheus.relabel.budget.receiver]
+  job_name        = "node"
+  scrape_interval = "60s"
+}
+
+// ─── Home Assistant ──────────────────────────────────────────────────────
+// The HA pod runs with hostNetwork, so this Service resolves to the node IP.
+// The bearer token is a Home Assistant long-lived access token —
+// /api/prometheus returns 401 without it.
+//
+// If this scrape produces more than a few thousand series, tighten the filter
+// in config/packages/prometheus.yaml rather than dropping metrics here. Not
+// exporting them at all is cheaper than exporting and discarding.
+
+prometheus.scrape "homeassistant" {
+  targets = [{
+    __address__ = "homeassistant." + sys.env("NAMESPACE") + ".svc.cluster.local:8123",
+  }]
+  job_name          = "homeassistant"
+  metrics_path      = "/api/prometheus"
+  bearer_token_file = "/etc/grafana-cloud/ha-token"
+  scrape_interval   = "60s"
+  forward_to        = [prometheus.relabel.budget.receiver]
+}
+
+// ─── Cluster state ───────────────────────────────────────────────────────
+// kube-state-metrics is enormously chatty by default. This is a KEEP-list, not
+// a drop-list: only these survive. Everything here answers a question we
+// actually alert on.
+
+prometheus.scrape "kube_state_metrics" {
+  targets = [{
+    __address__ = "kube-state-metrics." + sys.env("NAMESPACE") + ".svc.cluster.local:8080",
+  }]
+  job_name        = "kube-state-metrics"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.relabel.kube_state.receiver]
+}
+
+prometheus.relabel "kube_state" {
+  forward_to = [prometheus.relabel.budget.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "kube_(pod_container_status_restarts_total|pod_container_status_waiting_reason|pod_status_phase|deployment_status_replicas_available|statefulset_status_replicas_ready|persistentvolumeclaim_resource_requests_storage_bytes|node_status_condition|job_status_failed|job_status_succeeded|cronjob_status_last_successful_time)"
+    action        = "keep"
+  }
+}
+
+// ─── Container resource usage (cAdvisor via the kubelet) ─────────────────
+// Only two metric families are kept. Full cAdvisor output is thousands of
+// series per node and would eat most of the free-tier budget on its own; these
+// two answer "what is using the memory" and "what is using the CPU", which is
+// all we need with five pods.
+
+discovery.kubernetes "nodes" {
+  role = "node"
+}
+
+discovery.relabel "cadvisor" {
+  targets = discovery.kubernetes.nodes.targets
+
+  rule {
+    target_label = "__address__"
+    replacement  = "kubernetes.default.svc.cluster.local:443"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_node_name"]
+    target_label  = "__metrics_path__"
+    regex         = "(.+)"
+    replacement   = "/api/v1/nodes/${1}/proxy/metrics/cadvisor"
+  }
+}
+
+prometheus.scrape "cadvisor" {
+  targets           = discovery.relabel.cadvisor.output
+  job_name          = "cadvisor"
+  scheme            = "https"
+  bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  scrape_interval   = "60s"
+  forward_to        = [prometheus.relabel.cadvisor.receiver]
+
+  tls_config {
+    ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+  }
+}
+
+prometheus.relabel "cadvisor" {
+  forward_to = [prometheus.relabel.budget.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_(memory_working_set_bytes|cpu_usage_seconds_total)"
+    action        = "keep"
+  }
+  // Drop the per-cgroup rollup rows, which duplicate the per-container numbers
+  // with an empty container label.
+  rule {
+    source_labels = ["container"]
+    regex         = ""
+    action        = "drop"
+  }
+}
+
+// ─── Logs ────────────────────────────────────────────────────────────────
+// Pod stdout to Grafana Cloud Loki. This is what lets you debug a Zigbee
+// pairing failure from a laptop instead of SSHing to the server.
+
+discovery.kubernetes "pods" {
+  role = "pod"
+}
+
+discovery.relabel "pod_logs" {
+  targets = discovery.kubernetes.pods.targets
+
+  // Only our own namespaces plus the control plane. Without this, Calico and
+  // kubelet chatter dominate the log volume.
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    regex         = "ha-.*|kube-system|argocd|sealed-secrets"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    target_label  = "app"
+  }
+}
+
+loki.source.kubernetes "pods" {
+  targets    = discovery.relabel.pod_logs.output
+  forward_to = [loki.write.grafana_cloud.receiver]
+}

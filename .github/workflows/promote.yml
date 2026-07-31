@@ -1,0 +1,78 @@
+name: promote
+
+# Enforces the promotion direction: dev -> test -> main.
+#
+# Nothing here deploys. Argo CD does the deploying, by watching branches. This
+# workflow only guarantees that a change cannot reach `main` without having
+# passed through `test` first — which is the entire value of having three
+# branches.
+on:
+  pull_request:
+    branches: [test, main]
+
+permissions:
+  contents: read
+
+jobs:
+  direction:
+    name: Check promotion direction
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the source branch
+        env:
+          # Via env rather than inline in `run:` — branch names are
+          # attacker-controllable on a fork PR and would otherwise be
+          # interpolated straight into the shell.
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          set -eu
+          case "$BASE" in
+            test)
+              if [ "$HEAD" != "dev" ]; then
+                echo "::error::PRs into 'test' must come from 'dev' (got '$HEAD')."
+                echo "The promotion path is dev -> test -> main. Merge into dev first."
+                exit 1
+              fi
+              ;;
+            main)
+              if [ "$HEAD" != "test" ]; then
+                echo "::error::PRs into 'main' must come from 'test' (got '$HEAD')."
+                echo "main is production — Argo CD auto-syncs it to ha-prod."
+                echo "Promote dev -> test, verify, then test -> main."
+                exit 1
+              fi
+              ;;
+          esac
+          echo "OK: $HEAD -> $BASE"
+
+  prod-change-summary:
+    name: Summarise production impact
+    if: github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Diff the rendered prod manifests
+        run: |
+          set -eu
+          curl -sSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+          git checkout -q "origin/${GITHUB_BASE_REF}"
+          kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/prod > /tmp/before.yaml
+
+          git checkout -q "${GITHUB_SHA}"
+          kustomize build --load-restrictor LoadRestrictionsNone k8s/overlays/prod > /tmp/after.yaml
+
+          # This is what Argo CD will apply to the live house the moment this
+          # PR merges. Worth reading before clicking the button.
+          {
+            echo '## Rendered changes to `ha-prod`'
+            echo
+            echo '```diff'
+            diff -u /tmp/before.yaml /tmp/after.yaml || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
