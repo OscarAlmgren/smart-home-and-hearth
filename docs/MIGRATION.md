@@ -160,11 +160,13 @@ Nightly restic `CronJob`, in order of criticality:
 
 - [x] `scripts/bootstrap-microk8s.sh`
 - [x] Write [microk8s-bootstrap.md](microk8s-bootstrap.md)
-- [ ] `kustomize build` clean for all three overlays — **NOT YET RUN.** kustomize
-      is not installed on the authoring workstation. CI runs it on every push,
-      so the first push to `dev` is what actually proves this.
+- [x] `kustomize build` + `kubeconform` clean for all three overlays — verified
+      in CI, run `30617928362` on commit `6630a3c`
 - [x] `./scripts/render-env.sh --check` passes
 - [x] All YAML parses; Home Assistant packages each expose exactly one domain key
+- [x] `hass --script check_config` passes against the pinned image
+- [x] Invariant assertions pass (`Recreate`, `hostNetwork`,
+      `ClusterFirstWithHostNet`, no `/dev/tty*` device paths)
 
 ## Step 9 — GATE: cluster bring-up
 

@@ -22,7 +22,7 @@ jobs:
     name: .env ↔ overlay consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Catches a floating image tag, an invalid timezone, and drift between
       # .env.<env> and the overlay's image tag.
       - run: ./scripts/render-env.sh --check
@@ -35,7 +35,7 @@ jobs:
       matrix:
         overlay: [dev, test, prod]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install kustomize and kubeconform
         run: |
@@ -92,7 +92,7 @@ jobs:
     name: No plaintext secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check tracked .env files
         run: |
@@ -131,7 +131,7 @@ jobs:
     name: Home Assistant config syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Provide a secrets.yaml
         run: |
