@@ -1,0 +1,21 @@
+# Secrets — never commit
+config/secrets.yaml
+
+# Home Assistant runtime state (regenerated automatically, don't version)
+config/.storage/
+config/.cloud/
+config/deps/
+config/tts/
+config/image/
+config/home-assistant.log*
+config/home-assistant_v2.db*
+config/*.db-shm
+config/*.db-wal
+config/.HA_VERSION
+config/__pycache__/
+
+# Local env overrides
+.env
+
+# OS
+.DS_Store
