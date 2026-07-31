@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup
+  labels:
+    app.kubernetes.io/name: backup
+# The Role and RoleBinding that let this ServiceAccount read the sealing keys
+# live in the `sealed-secrets` namespace, not this one. They are applied
+# separately by scripts/bootstrap-microk8s.sh from k8s/cluster/, because
+# Kustomize's `namespace:` transformer would otherwise rewrite them into the
+# application namespace and silently break the grant.

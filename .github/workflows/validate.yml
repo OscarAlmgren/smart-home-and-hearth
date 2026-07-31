@@ -1,0 +1,148 @@
+name: validate
+
+# Runs on every branch and PR. This is the entire gate for `dev`, which has no
+# cluster footprint at all — see docs/lcm.md.
+on:
+  push:
+    branches: [dev, test, main]
+  pull_request:
+    branches: [dev, test, main]
+
+permissions:
+  contents: read
+
+env:
+  # Must match HA_VERSION in the .env files. render-env.sh enforces that they
+  # agree with the overlays; this is only used to pull the image for the config
+  # syntax check.
+  HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.7.4
+
+jobs:
+  env-consistency:
+    name: .env ↔ overlay consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Catches a floating image tag, an invalid timezone, and drift between
+      # .env.<env> and the overlay's image tag.
+      - run: ./scripts/render-env.sh --check
+
+  kustomize:
+    name: Build and validate manifests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        overlay: [dev, test, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kustomize and kubeconform
+        run: |
+          curl -sSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/
+
+      - name: Build
+        run: |
+          # LoadRestrictionsNone is required: the base reads ../../config/ and
+          # ../../.env.*, which sit outside its own directory. Argo CD is
+          # configured with the same flag via kustomize.buildOptions — if these
+          # two ever diverge, CI passes and the cluster fails.
+          kustomize build --load-restrictor LoadRestrictionsNone \
+            "k8s/overlays/${{ matrix.overlay }}" > /tmp/manifests.yaml
+          wc -l /tmp/manifests.yaml
+
+      - name: Validate against Kubernetes schemas
+        run: |
+          # -ignore-missing-schemas so SealedSecret (a CRD kubeconform has no
+          # schema for) does not fail the build. Everything built-in is still
+          # strictly validated.
+          kubeconform \
+            -strict \
+            -summary \
+            -ignore-missing-schemas \
+            -kubernetes-version 1.31.0 \
+            /tmp/manifests.yaml
+
+      - name: Assert invariants
+        run: |
+          # These are the settings that break the deployment in slow, confusing
+          # ways if someone "tidies" them. Cheap to assert, expensive to debug.
+          set -eu
+          m=/tmp/manifests.yaml
+
+          grep -q "type: Recreate" "$m" \
+            || { echo "::error::Home Assistant must use strategy: Recreate — RollingUpdate deadlocks on the host port and serial device"; exit 1; }
+
+          grep -q "hostNetwork: true" "$m" \
+            || { echo "::error::hostNetwork is required for mDNS/SSDP discovery"; exit 1; }
+
+          grep -q "dnsPolicy: ClusterFirstWithHostNet" "$m" \
+            || { echo "::error::hostNetwork without ClusterFirstWithHostNet loses cluster DNS, so Postgres becomes unresolvable"; exit 1; }
+
+          if grep -qE 'path: /dev/tty(ACM|USB)' "$m"; then
+            echo "::error::Serial devices must use /dev/serial/by-id/ — /dev/ttyACM0 is assigned in kernel enumeration order and will point at the wrong radio after a reboot"
+            exit 1
+          fi
+
+  secrets-scan:
+    name: No plaintext secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tracked .env files
+        run: |
+          # .env.dev/.test/.prod are deliberately committed, which makes them an
+          # inviting place to put a token. They must only ever contain
+          # HA_VERSION and TZ.
+          set -eu
+          fail=0
+          for f in .env.dev .env.test .env.prod .env.example; do
+            while IFS= read -r line; do
+              case "$line" in
+                ''|\#*) continue ;;
+                HA_VERSION=*|TZ=*) continue ;;
+                *)
+                  echo "::error file=$f::Unexpected key in a tracked env file: ${line%%=*}"
+                  echo "  Only HA_VERSION and TZ belong here. Secrets go through Sealed Secrets."
+                  fail=1
+                  ;;
+              esac
+            done < "$f"
+          done
+          exit $fail
+
+      - name: Check SealedSecrets are actually sealed
+        run: |
+          set -eu
+          # A plain `kind: Secret` with data in k8s/ means someone committed a
+          # real secret. SealedSecret is the only acceptable form.
+          if grep -rl "^kind: Secret$" k8s/ 2>/dev/null | grep -q .; then
+            echo "::error::Found a plaintext Secret manifest under k8s/. Use SealedSecret."
+            grep -rl "^kind: Secret$" k8s/
+            exit 1
+          fi
+
+  ha-config:
+    name: Home Assistant config syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Provide a secrets.yaml
+        run: |
+          # check_config resolves every !secret reference, so it needs a file
+          # present. The example has the full key set with dummy values, which
+          # is exactly what is wanted here — no real secret ever reaches CI.
+          cp config/secrets.yaml.example config/secrets.yaml
+
+      - name: Run check_config
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/config:/config" \
+            "$HA_IMAGE" \
+            python -m homeassistant --script check_config -c /config

@@ -1,0 +1,56 @@
+# Recorder — history database.
+#
+# `default_config:` would otherwise give us SQLite at /config/home-assistant_v2.db
+# with a 10-day purge. We override it to point at the in-cluster Postgres, for
+# two reasons:
+#
+#   1. SQLite on a hostpath PVC is fragile under pod restarts.
+#   2. Choosing Postgres now, while there is no data, means never having to run
+#      a database migration later.
+#
+# See docs/MIGRATION.md § Decisions.
+
+recorder:
+  db_url: !secret recorder_db_url
+
+  # Flash wear mitigation. The server boots from a 16 GB SATA flash module and
+  # the previous one died outright — see docs/hardware.md.
+  #
+  # commit_interval defaults to 1 second, which means the recorder issues a
+  # database commit every second, all day. 30 s cuts write amplification by
+  # roughly 30x. The cost is losing up to 30 s of history on an unclean
+  # shutdown, which is an easy trade for a home install.
+  commit_interval: 30
+
+  # 7 days while we are on the flash module. RAISE THIS TO 90 once the HDD is
+  # fitted and Postgres data has moved onto it — but check with Oscar first,
+  # per CLAUDE.md.
+  purge_keep_days: 7
+  auto_purge: true
+
+  # Repack reclaims disk after a purge. Important here: without it, Postgres
+  # holds onto dead tuples and the 500 Mi PVC fills even though rows were
+  # deleted.
+  auto_repack: true
+
+  exclude:
+    entity_globs:
+      # These update every second or minute and have no historical value —
+      # they are pure write volume.
+      - sensor.date*
+      - sensor.time*
+      - sensor.*_uptime
+      - sensor.*_last_restart
+      - sensor.*_last_seen
+
+    domains:
+      # Presence updates are extremely chatty on a phone-based setup. Drop the
+      # history but keep the live state, which is all automations need.
+      # Remove this line if you want presence history in the logbook.
+      - device_tracker
+
+# Long-term statistics (the `statistics` tables) are NOT affected by
+# purge_keep_days — HA keeps 5-minute and hourly aggregates for sensors with a
+# state_class indefinitely. That is what makes the Energy dashboard work on a
+# 7-day purge, and it is why Postgres remains the long-term store even though
+# Grafana Cloud's free tier only retains 14 days.

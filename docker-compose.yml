@@ -1,14 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LEGACY — LOCAL EDITING ONLY. THIS IS NOT HOW THE SERVER RUNS ANYTHING.
+#
+# The server runs Home Assistant on MicroK8s, deployed by Argo CD from
+# k8s/overlays/prod. See docs/MIGRATION.md.
+#
+# This file is kept as a workstation escape hatch: bring Home Assistant up
+# locally to edit YAML, check that an automation loads, or try a config change
+# before committing it.
+#
+#     cp .env.example .env
+#     cp config/secrets.yaml.example config/secrets.yaml
+#     # edit secrets.yaml: set recorder_db_url to the sqlite:// line
+#     docker compose up
+#
+# Do NOT run this on henrybook. It would contend with the Kubernetes pod for
+# host :8123 and the Zigbee dongle, and whichever won would be unclear.
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
   homeassistant:
-    container_name: homeassistant
-    image: ghcr.io/home-assistant/home-assistant:${HA_VERSION:-stable}
+    container_name: homeassistant-local
+    # Pinned, matching .env. Never `stable` — see .env.example.
+    image: ghcr.io/home-assistant/home-assistant:${HA_VERSION:?set HA_VERSION in .env}
     volumes:
       - ./config:/config
       - /etc/localtime:/etc/localtime:ro
-    restart: unless-stopped
-    # privileged + host networking is the upstream-recommended baseline:
-    # it's what mDNS/SSDP discovery and USB devices (Zigbee/Z-Wave sticks) need.
-    privileged: true
-    network_mode: host
+    restart: "no"          # a local scratch instance should not survive a reboot
     environment:
-      - TZ=${TZ:-Etc/UTC}
+      - TZ=${TZ:?set TZ in .env}
+    # Plain port mapping rather than host networking. Discovery will not work,
+    # which is fine — this instance is for editing YAML, not talking to devices,
+    # and host networking on a workstation is needlessly invasive.
+    ports:
+      - "8123:8123"

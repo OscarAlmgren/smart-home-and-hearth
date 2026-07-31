@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: henrybook
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: 999          # postgres group in the official image
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+
+          # Tuned small deliberately. The defaults assume a server with real
+          # memory; this node has 6 GiB shared with everything else.
+          args:
+            - -c
+            - shared_buffers=64MB
+            - -c
+            - effective_cache_size=256MB
+            - -c
+            - max_connections=20
+            - -c
+            - work_mem=4MB
+            - -c
+            - maintenance_work_mem=32MB
+            # Flash wear: fewer, larger checkpoints beat constant small writes.
+            - -c
+            - checkpoint_timeout=15min
+            - -c
+            - checkpoint_completion_target=0.9
+            # Cap WAL so a burst cannot fill the PVC and wedge the database.
+            - -c
+            - max_wal_size=256MB
+            - -c
+            - min_wal_size=64MB
+
+          env:
+            - name: POSTGRES_DB
+              value: homeassistant
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: postgres-credentials, key: username }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: postgres-credentials, key: password }
+            # The official image refuses to initialise into a directory that is
+            # not empty. A hostpath PVC can contain lost+found, so put the
+            # cluster in a subdirectory rather than at the mount root.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+
+          ports:
+            - name: postgres
+              containerPort: 5432
+
+          # Wrapped in sh -c so $POSTGRES_USER expands. An exec probe runs the
+          # binary directly with no shell, so a bare ["pg_isready", "-U",
+          # "$POSTGRES_USER"] would look for a literally-named role and fail.
+          livenessProbe:
+            exec:
+              command:
+                ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              # No CPU limit, for the same reason as Home Assistant: 2 slow
+              # cores, and throttling the database throttles the whole install.
+              memory: 384Mi
+
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: microk8s-hostpath
+        resources:
+          requests:
+            # Not enforced by hostpath — see the note in homeassistant/pvc.yaml.
+            # Sized against the 16 GB flash module; ask Oscar before raising.
+            storage: 500Mi

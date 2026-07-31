@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alloy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alloy
+    spec:
+      serviceAccountName: alloy
+      nodeSelector:
+        kubernetes.io/hostname: henrybook
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.10.0
+          imagePullPolicy: IfNotPresent
+
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --storage.path=/var/lib/alloy/data
+            # Bind the UI to localhost only. It is useful for debugging via
+            # `kubectl port-forward` but must not be exposed on the LAN.
+            - --server.http.listen-addr=127.0.0.1:12345
+
+          env:
+            # Used by the config to build in-cluster Service addresses, so the
+            # same base works in whichever namespace the overlay selects.
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GC_PROM_URL
+              valueFrom:
+                secretKeyRef: { name: grafana-cloud, key: prometheus-url }
+            - name: GC_PROM_USER
+              valueFrom:
+                secretKeyRef: { name: grafana-cloud, key: prometheus-username }
+            - name: GC_LOKI_URL
+              valueFrom:
+                secretKeyRef: { name: grafana-cloud, key: loki-url }
+            - name: GC_LOKI_USER
+              valueFrom:
+                secretKeyRef: { name: grafana-cloud, key: loki-username }
+            - name: GC_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: grafana-cloud, key: api-token }
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 320Mi
+
+          volumeMounts:
+            - { name: config, mountPath: /etc/alloy }
+            # The Home Assistant bearer token, read by bearer_token_file.
+            - { name: gc-secret, mountPath: /etc/grafana-cloud, readOnly: true }
+            - { name: data, mountPath: /var/lib/alloy/data }
+            # prometheus.exporter.unix reads host metrics through these. They
+            # are read-only, but they are still the host's real filesystems —
+            # this is why Alloy needs the privileged namespace.
+            - { name: rootfs, mountPath: /host/root, readOnly: true }
+            - { name: procfs, mountPath: /host/proc, readOnly: true }
+            - { name: sysfs, mountPath: /host/sys, readOnly: true }
+
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: gc-secret
+          secret:
+            secretName: grafana-cloud
+            items:
+              - key: ha-token
+                path: ha-token
+        - name: data
+          # Deliberately emptyDir, not a PVC. The only thing lost on restart is
+          # the remote_write WAL — at most a few minutes of metrics — and a PVC
+          # here would consume disk that the recorder database needs more.
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: rootfs
+          hostPath: { path: /, type: Directory }
+        - name: procfs
+          hostPath: { path: /proc, type: Directory }
+        - name: sysfs
+          hostPath: { path: /sys, type: Directory }

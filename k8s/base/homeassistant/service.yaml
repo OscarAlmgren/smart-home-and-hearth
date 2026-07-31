@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: homeassistant
+  labels:
+    app.kubernetes.io/name: homeassistant
+spec:
+  # The pod runs with hostNetwork, so Home Assistant is already reachable at
+  # <node-ip>:8123 and this Service is not how users get to it. It exists so
+  # in-cluster clients (Grafana Alloy scraping /api/prometheus) have a stable
+  # name, and so the endpoint shows up in kube-state-metrics.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: homeassistant
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+      protocol: TCP

@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Environment: dev — branch `dev`.
+#
+# NEVER APPLIED TO A CLUSTER. There is no Argo CD Application for dev, by
+# design — the server cannot host a third environment.
+#
+# This overlay exists so CI can prove the manifests still build and validate
+# after a change, before that change is promoted to test. It is a compile
+# check, not a deployment.
+#
+#   kubectl kustomize k8s/overlays/dev --load-restrictor LoadRestrictionsNone
+
+namespace: ha-dev
+
+resources:
+  - ../../base
+  - ../../base/monitoring
+  - ../../base/backup
+  # No secrets/ — dev is never applied, so there is nothing to seal against.
+  # The workloads reference Secrets that would not exist in a ha-dev namespace,
+  # which is fine: kustomize builds references, it does not resolve them.
+
+images:
+  - name: ghcr.io/home-assistant/home-assistant
+    newTag: 2026.7.4
+
+configMapGenerator:
+  - name: ha-env
+    behavior: replace
+    envs:
+      - ../../../.env.dev
+
+patches:
+  - path: patches/scale-to-zero.yaml

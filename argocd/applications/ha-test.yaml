@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ha-test
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: smart-home
+
+  source:
+    repoURL: git@github.com:OscarAlmgren/smart-home-and-hearth.git
+    targetRevision: test
+    path: k8s/overlays/test
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ha-test
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # MANUAL SYNC, deliberately.
+  #
+  # Everything in this environment runs at replicas: 0, so syncing costs no CPU
+  # and no memory — but it does exercise the real API server: admission
+  # control, Pod Security enforcement, schema validation, and conflicts against
+  # immutable fields on the previously applied version. That is validation no
+  # amount of `kustomize build` can give you.
+  #
+  # Sync it by hand as the gate before promoting test -> main:
+  #
+  #     argocd app sync ha-test
+  #     argocd app get ha-test          # must be Synced / Healthy
+  #
+  # See docs/lcm.md § Promotion.
+  # ───────────────────────────────────────────────────────────────────────────
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false
+      - ServerSideApply=true
