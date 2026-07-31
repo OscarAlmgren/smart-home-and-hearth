@@ -6,7 +6,7 @@ install, no host Python.
 
 ## Layout
 
-```
+```bash
 docker-compose.yml    # Home Assistant container definition
 .env.example           # copy to .env — image tag + timezone
 config/                # mounted into the container at /config
@@ -32,7 +32,7 @@ Home Assistant will come up at `http://<server-ip>:8123`.
 
 Push config changes from wherever you edit, then on the server:
 
-```
+```bash
 ./scripts/deploy.sh
 ```
 
