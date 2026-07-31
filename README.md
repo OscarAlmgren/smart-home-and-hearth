@@ -1,4 +1,4 @@
-# homeassistant
+# smart-home-and-hearth
 
 Foundational, container-based Home Assistant setup. This repo is meant to be
 cloned onto the Ubuntu server and run with Docker Compose — no local HA
