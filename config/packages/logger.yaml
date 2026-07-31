@@ -1,0 +1,28 @@
+# Logging.
+#
+# Container stdout is collected by Alloy and shipped to Grafana Cloud Loki, so
+# these levels determine both what you see in `kubectl logs` and what is
+# queryable in Loki. See docs/grafana-cloud.md.
+#
+# Keep the default at `warning`. Home Assistant at `info` is extremely verbose,
+# and Loki's free tier allowance (50 GB/month) is generous but not infinite —
+# more importantly, the noise makes real errors hard to spot.
+
+logger:
+  default: warning
+
+  logs:
+    # Home Assistant's own startup and setup path — worth seeing at info so a
+    # failed integration is visible without turning everything up.
+    homeassistant.setup: info
+    homeassistant.bootstrap: info
+
+    # Zigbee. Raise `zigpy` to debug temporarily when pairing misbehaves, then
+    # put it back — debug-level zigpy is a firehose.
+    homeassistant.components.zha: info
+    zigpy: warning
+    bellows: warning
+
+    # Recorder — surfaces database connection failures and slow purges, which
+    # matter given the disk constraints.
+    homeassistant.components.recorder: info

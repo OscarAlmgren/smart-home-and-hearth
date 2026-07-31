@@ -1,0 +1,51 @@
+# restic exclude patterns for /config.
+#
+# The guiding rule: back up what cannot be regenerated. Everything excluded
+# here is either reproducible from git, reproducible by Home Assistant on next
+# start, or captured more reliably somewhere else in the same job.
+
+# The live SQLite files. Nothing should be writing these — the recorder points
+# at Postgres — but if a fallback ever puts them back, a filesystem copy of an
+# open database is torn and unrestorable. The pg_dump initContainer is the real
+# database backup.
+/config/home-assistant_v2.db
+/config/home-assistant_v2.db-shm
+/config/home-assistant_v2.db-wal
+
+# Python packages Home Assistant installs at runtime for discovered
+# integrations. Hundreds of MB, fully regenerated on next start.
+/config/deps
+
+# Text-to-speech cache. Regenerated on demand.
+/config/tts
+
+# Camera and media snapshots — potentially very large, no recovery value.
+/config/image
+/config/www/snapshots
+
+# Logs. They are already shipped to Grafana Cloud Loki.
+/config/home-assistant.log
+/config/home-assistant.log.*
+/config/home-assistant.log.fault
+
+# Home Assistant's own backup archives. Backing up backups doubles the size for
+# nothing — this job captures the underlying state directly.
+/config/backups
+
+__pycache__
+*.pyc
+
+# ── Deliberately NOT excluded, and why ──────────────────────────────────────
+#
+# /config/.storage       The entity registry, device registry, auth tokens, user
+#                        accounts and dashboards. Losing this loses the install
+#                        even with a perfect database restore: every entity
+#                        comes back with a new ID and every automation breaks.
+#
+# /config/zigbee.db      The ZHA network database — coordinator network key,
+#                        PAN ID and the pairing state of every device. Without
+#                        it you re-pair every Zigbee device in the house by
+#                        hand. This is the single most commonly forgotten file
+#                        in Home Assistant backups.
+#
+# /config/.cloud         Nabu Casa credentials, if ever used.

@@ -1,0 +1,175 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup
+  labels:
+    app.kubernetes.io/name: backup
+spec:
+  # 03:15 local. Offset from the hour so it does not collide with Home
+  # Assistant's own nightly recorder purge.
+  schedule: "15 3 * * *"
+  timeZone: Europe/Stockholm
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # If the node was off at 03:15, run on the next start rather than skipping
+  # the day entirely.
+  startingDeadlineSeconds: 7200
+
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: backup
+          nodeSelector:
+            kubernetes.io/hostname: henrybook
+
+          initContainers:
+            # ── 1. Database dump ───────────────────────────────────────────
+            # pg_dump over the network rather than a filesystem copy of the
+            # data directory: copying PGDATA from under a running Postgres
+            # produces a torn, unrestorable snapshot.
+            #
+            # Reuses postgres:16-alpine, already on the node for the database
+            # itself — no extra image on a 12 GiB disk.
+            - name: pg-dump
+              image: postgres:16-alpine
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  echo "==> dumping recorder database"
+                  export PGPASSWORD="$POSTGRES_PASSWORD"
+                  pg_dump \
+                    --host="postgres.${NAMESPACE}.svc.cluster.local" \
+                    --username="$POSTGRES_USER" \
+                    --dbname=homeassistant \
+                    --format=custom \
+                    --compress=6 \
+                    --file=/staging/homeassistant.dump
+                  ls -lh /staging/homeassistant.dump
+              env:
+                - name: NAMESPACE
+                  valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef: { name: postgres-credentials, key: username }
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: postgres-credentials, key: password }
+              volumeMounts:
+                - { name: staging, mountPath: /staging }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 192Mi }
+
+            # ── 2. Sealed Secrets private key ──────────────────────────────
+            # THE most important item in this backup.
+            #
+            # Every secret in this repo is encrypted against this key pair. The
+            # public half is in git; the private half exists only inside the
+            # cluster. Lose it and the committed SealedSecrets are permanently
+            # undecryptable — the repo restores, and nothing starts.
+            #
+            # The controller also rotates in a fresh key roughly every 30 days
+            # while retaining the old ones, so this genuinely needs to run on a
+            # schedule rather than being exported once by hand.
+            - name: sealing-key
+              image: bitnami/kubectl:1.31
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  echo "==> exporting sealed-secrets private keys"
+                  kubectl -n sealed-secrets get secret \
+                    -l sealedsecrets.bitnami.com/sealed-secrets-key \
+                    -o yaml > /staging/sealed-secrets-keys.yaml
+
+                  # An empty export means the RBAC grant is missing and the
+                  # backup is quietly worthless. Fail loudly instead.
+                  if ! grep -q "kind: Secret" /staging/sealed-secrets-keys.yaml; then
+                    echo "ERROR: no sealing keys exported — check the Role/RoleBinding" >&2
+                    echo "       created by scripts/bootstrap-microk8s.sh" >&2
+                    exit 1
+                  fi
+                  echo "==> ok"
+              volumeMounts:
+                - { name: staging, mountPath: /staging }
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 96Mi }
+
+          containers:
+            # ── 3. Ship it ─────────────────────────────────────────────────
+            - name: restic
+              image: restic/restic:0.17.3
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  # `restic init` on an existing repo exits non-zero, which
+                  # would fail the job under `set -e`. Probe first.
+                  if ! restic cat config >/dev/null 2>&1; then
+                    echo "==> initialising restic repository"
+                    restic init
+                  fi
+
+                  echo "==> backing up"
+                  restic backup \
+                    --host homeassistant \
+                    --tag automated \
+                    --exclude-file /etc/restic/excludes.txt \
+                    /staging /config
+
+                  echo "==> applying retention"
+                  restic forget \
+                    --host homeassistant \
+                    --keep-daily 7 \
+                    --keep-weekly 4 \
+                    --keep-monthly 6 \
+                    --prune
+
+                  # Cheap structural check every run. A full --read-data would
+                  # re-download every pack and is far too slow here; 5% means
+                  # the whole repo gets verified over a few weeks.
+                  echo "==> verifying"
+                  restic check --read-data-subset=5%
+
+                  echo "==> done"
+                  restic snapshots --host homeassistant --latest 3
+              env:
+                - name: RESTIC_REPOSITORY
+                  valueFrom: { secretKeyRef: { name: restic, key: repository } }
+                - name: RESTIC_PASSWORD
+                  valueFrom: { secretKeyRef: { name: restic, key: password } }
+                # S3-compatible from day one, so pointing at the MinIO Pi later
+                # is an endpoint change in one Secret, not a rewrite.
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: { secretKeyRef: { name: restic, key: aws-access-key-id } }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: restic, key: aws-secret-access-key } }
+              volumeMounts:
+                - { name: staging, mountPath: /staging, readOnly: true }
+                # Read-only: a backup job must never be able to damage the
+                # thing it is backing up.
+                - { name: config, mountPath: /config, readOnly: true }
+                - { name: excludes, mountPath: /etc/restic }
+              resources:
+                requests: { cpu: 100m, memory: 128Mi }
+                limits: { memory: 512Mi }
+
+          volumes:
+            - name: staging
+              emptyDir:
+                sizeLimit: 512Mi
+            - name: config
+              persistentVolumeClaim:
+                claimName: ha-config
+                # ReadWriteOnce permits a second pod on the SAME node, which is
+                # satisfied here: nodeSelector pins both to henrybook.
+                readOnly: true
+            - name: excludes
+              configMap:
+                name: restic-excludes

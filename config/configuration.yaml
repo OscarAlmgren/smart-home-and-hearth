@@ -6,6 +6,12 @@ homeassistant:
   unit_system: metric
   time_zone: !secret home_timezone
 
+  # Everything else lives in packages/, one file per concern. Packages merge
+  # into the top-level config, so packages/recorder.yaml contributing a
+  # `recorder:` block is equivalent to writing it here — just reviewable in
+  # isolation and easier to diff per environment.
+  packages: !include_dir_named packages
+
 default_config:
 
 automation: !include automations.yaml

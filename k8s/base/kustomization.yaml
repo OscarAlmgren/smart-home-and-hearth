@@ -1,0 +1,64 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# NOTE: this kustomization reads ../../config/ and ../../.env.*, which are
+# outside its own directory. Kustomize blocks that by default, so every build
+# — locally, in CI, and in Argo CD — must pass:
+#
+#     --load-restrictor LoadRestrictionsNone
+#
+# Argo CD gets it from `kustomize.buildOptions` in argocd-cm; see
+# scripts/bootstrap-microk8s.sh. The alternative was to bury the Home Assistant
+# YAML under k8s/base/homeassistant/config/, which makes the files you edit
+# most often the hardest to find.
+
+resources:
+  - namespace.yaml
+  - homeassistant/pvc.yaml
+  - homeassistant/service.yaml
+  - homeassistant/deployment.yaml
+  - postgres/service.yaml
+  - postgres/statefulset.yaml
+
+# Deliberately NOT `commonLabels:` — that injects labels into spec.selector,
+# which is immutable on Deployments and StatefulSets. Changing the label set
+# later would then require deleting and recreating the workloads.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: smart-home-and-hearth
+    includeSelectors: false
+
+configMapGenerator:
+  # Root-level Home Assistant config. configuration.yaml is overwritten in the
+  # PVC on every pod start; the three UI-editable files are only seeded if
+  # absent. See the sync-config initContainer.
+  - name: ha-config-files
+    files:
+      - ../../config/configuration.yaml
+      - ../../config/automations.yaml
+      - ../../config/scripts.yaml
+      - ../../config/scenes.yaml
+
+  # ConfigMap keys cannot contain "/", so packages/ needs its own ConfigMap
+  # mounted at a separate path rather than a nested key.
+  - name: ha-packages
+    files:
+      - ../../config/packages/recorder.yaml
+      - ../../config/packages/http.yaml
+      - ../../config/packages/prometheus.yaml
+      - ../../config/packages/logger.yaml
+
+  # Per-environment knobs, read straight from the tracked .env file so it stays
+  # the single human-facing place to change TZ. Overridden in each overlay to
+  # point at .env.dev / .env.test / .env.prod.
+  - name: ha-env
+    envs:
+      - ../../.env.prod
+
+# Generated ConfigMaps get a content hash suffix, so editing any Home Assistant
+# YAML produces a new ConfigMap name, which changes the pod spec, which rolls
+# the Deployment. That is what makes `git push` actually restart Home Assistant
+# with the new config — without it the ConfigMap would update in place and the
+# running pod would never notice.
+generatorOptions:
+  disableNameSuffixHash: false

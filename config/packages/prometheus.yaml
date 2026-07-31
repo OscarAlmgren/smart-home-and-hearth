@@ -1,0 +1,45 @@
+# Prometheus exporter — scraped by Grafana Alloy, forwarded to Grafana Cloud.
+#
+# Exposes GET /api/prometheus, which requires a long-lived access token.
+# See docs/grafana-cloud.md for creating the token and wiring up Alloy.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THE FILTER BELOW IS THE MOST IMPORTANT SETTING IN THIS REPO FOR COST CONTROL.
+#
+# Grafana Cloud's free tier allows 10,000 active series. An unfiltered Home
+# Assistant install emits one series per entity per attribute and can produce
+# tens of thousands — you would blow the budget within a day of pairing a few
+# Zigbee devices.
+#
+# The include list is an allowlist: only these domains are exported. Add
+# domains deliberately, and re-check the series count afterwards:
+#
+#   curl -s -H "Authorization: Bearer $TOKEN" \
+#     http://<server-ip>:8123/api/prometheus | grep -vc '^#'
+#
+# Keep the result comfortably under 10,000. docs/grafana-cloud.md § Series
+# budgeting walks through trimming this when you get close.
+# ─────────────────────────────────────────────────────────────────────────────
+
+prometheus:
+  # Emitted metrics are prefixed `homeassistant_` (the default). Community
+  # Grafana dashboards assume this prefix — do not set `namespace:` unless you
+  # are also rewriting the dashboards.
+
+  filter:
+    include_domains:
+      - binary_sensor
+      - climate
+      - cover
+      - light
+      - lock
+      - sensor
+      - switch
+
+    exclude_entity_globs:
+      # Excluded for the same reason they are excluded from the recorder:
+      # constant churn, no analytical value.
+      - sensor.date*
+      - sensor.time*
+      - sensor.*_last_seen
+      - sensor.*_last_restart

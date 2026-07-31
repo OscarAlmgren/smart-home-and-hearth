@@ -1,0 +1,50 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ha-prod
+  namespace: argocd
+  finalizers:
+    # Deleting this Application should also remove what it created, rather than
+    # orphaning the workloads.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: smart-home
+
+  source:
+    repoURL: git@github.com:OscarAlmgren/smart-home-and-hearth.git
+    # Production tracks `main`. Merging to main deploys to the live house.
+    targetRevision: main
+    path: k8s/overlays/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ha-prod
+
+  syncPolicy:
+    automated:
+      # Revert manual `kubectl edit` on the cluster back to what git says.
+      selfHeal: true
+      # Delete resources removed from git.
+      prune: true
+    syncOptions:
+      - CreateNamespace=false   # the namespace is a tracked resource, with its
+                                # Pod Security labels — let git own it
+      - PrunePropagationPolicy=foreground
+      - ServerSideApply=true
+
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+
+  ignoreDifferences:
+    # The Sealed Secrets controller creates and owns the decrypted Secret. Git
+    # contains only the SealedSecret, so without this Argo CD sees an
+    # unmanaged Secret with content it cannot account for and reports the app
+    # permanently OutOfSync.
+    - group: ""
+      kind: Secret
+      jsonPointers:
+        - /data

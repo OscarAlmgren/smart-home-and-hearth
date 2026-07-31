@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: smart-home
+  namespace: argocd
+spec:
+  description: Home Assistant and supporting workloads
+
+  sourceRepos:
+    - git@github.com:OscarAlmgren/smart-home-and-hearth.git
+
+  # Explicit allowlist. Without it a mistake in a manifest could have Argo CD
+  # apply resources into kube-system.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: ha-prod
+    - server: https://kubernetes.default.svc
+      namespace: ha-test
+
+  clusterResourceWhitelist:
+    # Namespaces are created by the Applications themselves.
+    - group: ""
+      kind: Namespace
+    # Alloy and kube-state-metrics need cluster-scoped read for node and pod
+    # discovery.
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

@@ -1,0 +1,56 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Environment: test — branch `test`.
+#
+# Applied to the cluster, but every workload runs at replicas: 0. See
+# patches/scale-to-zero.yaml for why, and docs/lcm.md for how it fits the
+# promotion flow.
+#
+#   kubectl kustomize k8s/overlays/test --load-restrictor LoadRestrictionsNone
+
+namespace: ha-test
+
+resources:
+  - ../../base
+
+  # ── Deliberately NOT included here ──────────────────────────────────────
+  #
+  # ../../base/monitoring and ../../base/backup are omitted, for two reasons.
+  #
+  # 1. CORRECTNESS. Both define ClusterRole and ClusterRoleBinding, which are
+  #    CLUSTER-scoped — the `namespace:` field above does not make them unique.
+  #    Applying them from both ha-test and ha-prod would produce two Argo CD
+  #    Applications claiming ownership of the same `alloy` and
+  #    `kube-state-metrics` ClusterRoles, leaving both permanently OutOfSync as
+  #    each reverts the other.
+  #
+  # 2. POINTLESSNESS. Everything runs at replicas: 0. There is nothing to
+  #    scrape and nothing to back up.
+  #
+  # dev keeps them, because dev is never applied to a cluster and their
+  # inclusion gives CI something extra to validate.
+  #
+  # ── No secrets/ either ──────────────────────────────────────────────────
+  #
+  # At replicas: 0 nothing consumes them, and Sealed Secrets are encrypted
+  # against a specific namespace and name, so a parallel set for ha-test would
+  # be real work for no benefit.
+  #
+  # Consequence: scaling test up for a smoke test requires sealing secrets into
+  # ha-test first. docs/lcm.md § Smoke-testing covers it.
+
+images:
+  - name: ghcr.io/home-assistant/home-assistant
+    newTag: 2026.7.4
+
+configMapGenerator:
+  - name: ha-env
+    behavior: replace
+    envs:
+      - ../../../.env.test
+
+patches:
+  - path: patches/scale-to-zero.yaml
+  # No Zigbee patch: the base points the device at /dev/null, which is correct
+  # here. There is only one physical dongle and prod owns it.

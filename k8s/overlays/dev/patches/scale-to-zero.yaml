@@ -1,0 +1,16 @@
+# Belt and braces. dev has no Argo CD Application and is never applied, but if
+# somebody ever does `kubectl apply -k k8s/overlays/dev` by hand on the server,
+# this stops it contending with prod for host :8123 and the Zigbee dongle.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homeassistant
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  replicas: 0

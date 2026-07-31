@@ -1,0 +1,26 @@
+# HTTP — LAN-only for phase 1.
+#
+# Home Assistant binds host :8123 directly (the pod runs with hostNetwork),
+# reachable on the LAN with no proxy in front. There is deliberately no Ingress
+# and no TLS yet — remote access is phase 3.
+
+http:
+  server_port: 8123
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # PHASE 3: uncomment these two settings at the same time you add the Ingress.
+  #
+  # Without them, Home Assistant sees every request as originating from the
+  # ingress controller's pod IP rather than the real client, and returns a hard
+  # 400 "Received X-Forwarded-For header from an untrusted proxy" on every
+  # request. The UI simply will not load, and the error does not obviously
+  # point back at this setting.
+  #
+  # trusted_proxies must list the ingress controller's POD CIDR, not the
+  # service IP. On MicroK8s with default Calico that is 10.1.0.0/16 — confirm
+  # with `kubectl -n ingress get pods -o wide` before trusting it.
+  #
+  # use_x_forwarded_for: true
+  # trusted_proxies:
+  #   - 10.1.0.0/16
+  # ───────────────────────────────────────────────────────────────────────────
