@@ -82,7 +82,11 @@ podman exec postgres psql -U ha -d homeassistant -c '\dt'   # HA tables exist
 - **GitOps loop.** No automated `git pull` + restart yet — deploying a change
   today means `git pull && sudo systemctl restart homeassistant.service` by
   hand on the server.
-- **Decommissioning MicroK8s.** Not done by this doc or `bootstrap-podman.sh`
-  — `microk8s` keeps running alongside Podman until the cutover above is
-  confirmed. Removing it (`sudo snap remove microk8s --purge`) is a separate,
-  deliberate step once you're satisfied.
+MicroK8s itself has been removed from henrybook (`sudo snap remove microk8s
+--purge`, 2026-08-06). It never had a workload running on it, and all four
+`k8s/overlays/prod/secrets/*.sealed.yaml` files were still unfilled
+placeholders (`encryptedData: {}`) — there was nothing to extract first.
+Verified clean afterward: no leftover Calico interfaces, no leftover
+`cali`/`kube` iptables chains, `/var/snap/microk8s` gone, disk usage
+74%→59%, load average ~2.3-2.7→~1.0-1.5 on the idle box. `k8s/` and
+`argocd/` remain in git as reference for the manifests this was ported from.
