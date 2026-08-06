@@ -24,7 +24,7 @@ Environment=POSTGRES_DB=homeassistant
 # POSTGRES_USER / POSTGRES_PASSWORD come from EnvironmentFile. Must match the
 # credentials embedded in config/secrets.yaml's recorder_db_url — nothing
 # checks that automatically, same caveat as the Sealed Secret version had.
-EnvironmentFile=/opt/smart-home-and-hearth/.env.prod.secret
+EnvironmentFile=/home/oscaralmgren/smart-home-and-hearth/.env.prod.secret
 # The image refuses to initialise into a non-empty directory, and a bind
 # mount's root can pick up filesystem cruft — keep the cluster in a
 # subdirectory rather than at the mount root.

@@ -50,8 +50,8 @@ Two files, both gitignored, both `chmod 600`, neither ever committed:
 ## Install
 
 ```bash
-git clone git@github.com:OscarAlmgren/smart-home-and-hearth.git /opt/smart-home-and-hearth
-cd /opt/smart-home-and-hearth
+git clone git@github.com:OscarAlmgren/smart-home-and-hearth.git /home/oscaralmgren/smart-home-and-hearth
+cd /home/oscaralmgren/smart-home-and-hearth
 ./scripts/bootstrap-podman.sh
 ```
 
@@ -74,6 +74,17 @@ podman exec postgres psql -U ha -d homeassistant -c '\dt'   # HA tables exist
 - [ ] `sudo systemctl start backup.service` (runs it once, on demand) completes without error — `journalctl -u backup.service`
 - [ ] **Restore drill** — `./scripts/restore.sh --target drill --snapshot latest`, then work through the checklist in docs/disaster-recovery.md § The restore drill. Do this before trusting this deployment with anything real.
 
+## MicroK8s decommissioning
+
+Done. Removed from henrybook via `sudo snap remove microk8s --purge`
+(2026-08-06). It never had a workload running on it, and all four
+`k8s/overlays/prod/secrets/*.sealed.yaml` files were still unfilled
+placeholders (`encryptedData: {}`) — there was nothing to extract first.
+Verified clean afterward: no leftover Calico interfaces, no leftover
+`cali`/`kube` iptables chains, `/var/snap/microk8s` gone, disk usage
+74%→59%, load average ~2.3-2.7→~1.0-1.5 on the idle box. `k8s/` and
+`argocd/` remain in git as reference for the manifests this was ported from.
+
 ## Known gaps — not yet ported
 
 - **Monitoring.** Alloy's k8s-specific scrape targets (kubelet, cAdvisor,
@@ -82,11 +93,3 @@ podman exec postgres psql -U ha -d homeassistant -c '\dt'   # HA tables exist
 - **GitOps loop.** No automated `git pull` + restart yet — deploying a change
   today means `git pull && sudo systemctl restart homeassistant.service` by
   hand on the server.
-MicroK8s itself has been removed from henrybook (`sudo snap remove microk8s
---purge`, 2026-08-06). It never had a workload running on it, and all four
-`k8s/overlays/prod/secrets/*.sealed.yaml` files were still unfilled
-placeholders (`encryptedData: {}`) — there was nothing to extract first.
-Verified clean afterward: no leftover Calico interfaces, no leftover
-`cali`/`kube` iptables chains, `/var/snap/microk8s` gone, disk usage
-74%→59%, load average ~2.3-2.7→~1.0-1.5 on the idle box. `k8s/` and
-`argocd/` remain in git as reference for the manifests this was ported from.

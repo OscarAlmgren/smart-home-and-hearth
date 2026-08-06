@@ -14,5 +14,5 @@ Before=homeassistant.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/smart-home-and-hearth
-ExecStart=/opt/smart-home-and-hearth/scripts/sync-ha-config.sh /opt/smart-home-and-hearth /var/lib/smart-home-and-hearth/ha-config
+WorkingDirectory=/home/oscaralmgren/smart-home-and-hearth
+ExecStart=/home/oscaralmgren/smart-home-and-hearth/scripts/sync-ha-config.sh /home/oscaralmgren/smart-home-and-hearth /var/lib/smart-home-and-hearth/ha-config

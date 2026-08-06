@@ -12,6 +12,6 @@ Requires=postgres.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/smart-home-and-hearth
-EnvironmentFile=/opt/smart-home-and-hearth/.env.prod.secret
-ExecStart=/opt/smart-home-and-hearth/scripts/backup.sh
+WorkingDirectory=/home/oscaralmgren/smart-home-and-hearth
+EnvironmentFile=/home/oscaralmgren/smart-home-and-hearth/.env.prod.secret
+ExecStart=/home/oscaralmgren/smart-home-and-hearth/scripts/backup.sh
