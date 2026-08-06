@@ -1,0 +1,17 @@
+# Plain systemd unit, not a Quadlet — install into /etc/systemd/system/,
+# alongside ha-sync-config.service (see docs/podman-deploy.md).
+#
+# Triggered by backup.timer. Type=oneshot with no Restart=: a failed backup
+# should be loud (non-zero exit, visible in `systemctl status` / journalctl)
+# rather than silently retried — same as the k8s CronJob's backoffLimit: 2
+# eventually gave up and surfaced as a failed Job.
+[Unit]
+Description=Backup Home Assistant config + database to restic
+After=postgres.service
+Requires=postgres.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/smart-home-and-hearth
+EnvironmentFile=/opt/smart-home-and-hearth/.env.prod.secret
+ExecStart=/opt/smart-home-and-hearth/scripts/backup.sh

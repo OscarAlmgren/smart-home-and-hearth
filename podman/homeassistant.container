@@ -1,0 +1,73 @@
+# Port of k8s/base/homeassistant/deployment.yaml. See that file's history and
+# docs/hardware.md for why these choices exist — carried over unchanged:
+#
+#   - host networking: mDNS/SSDP/DHCP discovery (Chromecast, Sonos, HomeKit)
+#     need broadcast/multicast traffic a bridge-networked container never sees
+#   - privileged: ZHA's USB/Bluetooth discovery walks sysfs paths a targeted
+#     capability set does not expose
+#   - no CPU limit: 2 slow cores: CFS throttling makes the UI unusable
+#
+# Install: symlink or copy into /etc/containers/systemd/. systemd-generator
+# turns this into homeassistant.service on the next `systemctl daemon-reload`.
+# See docs/podman-deploy.md.
+[Unit]
+Description=Home Assistant
+After=network-online.target ha-sync-config.service postgres.service
+Wants=network-online.target
+Requires=ha-sync-config.service postgres.service
+
+[Container]
+# HA_VERSION must match .env.prod — scripts/deploy.sh checks this before
+# restarting the unit, same drift check render-env.sh did for the k8s overlay.
+Image=ghcr.io/home-assistant/home-assistant:2026.7.4
+ContainerName=homeassistant
+
+Network=host
+# With host networking the container would otherwise inherit the host's
+# resolver as-is, which is fine here — there is no cluster DNS to lose
+# anymore. (Unlike the k8s version, no dnsPolicy workaround needed.)
+
+Environment=TZ=Europe/Stockholm
+
+Volume=/var/lib/smart-home-and-hearth/ha-config:/config
+# Home Assistant reads /etc/localtime in addition to TZ.
+Volume=/etc/localtime:/etc/localtime:ro
+
+# Zigbee: not fitted yet (docs/hardware.md — Planned additions). Once the
+# Sonoff dongle is in a USB 2.0 port:
+#   ls -l /dev/serial/by-id/
+# and uncomment, using that path. Never /dev/ttyACM0 — kernel enumeration
+# order changes across reboots and will silently point ZHA at the wrong radio.
+# AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_...-if00-port0:/dev/zigbee
+
+# Privileged + host network together are what --memory needs PodmanArgs for;
+# neither has a first-class Quadlet key.
+PodmanArgs=--privileged --memory=1536m
+
+# Home Assistant's first boot installs Python dependencies for every
+# discovered integration — on this CPU that can take several minutes.
+# HealthStartPeriod defers failure counting until after it, so a slow first
+# boot cannot get killed mid-install the way a naive healthcheck would.
+HealthCmd=wget --quiet --tries=1 --spider http://localhost:8123/ || exit 1
+HealthStartPeriod=600s
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+# Podman does not restart on health failure by default — this is what makes
+# the liveness check actually do something, matching k8s's livenessProbe.
+HealthOnFailure=restart
+
+[Service]
+# Same reasoning as postgres.container: cap at 5 restarts in 10 minutes, then
+# stop and require a human, rather than restarting forever.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=600
+StartLimitBurst=5
+# Home Assistant flushes the recorder and unloads integrations on shutdown —
+# on this CPU that is not instant, and SIGKILLing it mid-write is how
+# databases get corrupted.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target default.target

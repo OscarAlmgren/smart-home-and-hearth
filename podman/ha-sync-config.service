@@ -1,0 +1,18 @@
+# Runs scripts/sync-ha-config.sh before homeassistant.service starts.
+#
+# Type=oneshot with RemainAfterExit=yes: systemd treats this as "done", not
+# "still running", once the copy finishes — homeassistant.service's
+# Requires=/After= ordering waits for that, not for a long-lived process.
+#
+# This is a plain systemd unit, not a Quadlet — install: symlink or copy into
+# /etc/systemd/system/ (unlike the .container files in this directory, which
+# go in /etc/containers/systemd/ instead). See docs/podman-deploy.md.
+[Unit]
+Description=Sync git-managed Home Assistant config into the runtime directory
+Before=homeassistant.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/smart-home-and-hearth
+ExecStart=/opt/smart-home-and-hearth/scripts/sync-ha-config.sh /opt/smart-home-and-hearth /var/lib/smart-home-and-hearth/ha-config

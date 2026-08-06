@@ -1,155 +1,160 @@
 #!/usr/bin/env bash
 # Restore Home Assistant from a restic backup.
 #
-#     ./scripts/restore.sh --namespace ha-drill --snapshot latest   # drill
-#     ./scripts/restore.sh --namespace ha-prod  --snapshot latest   # for real
+#     ./scripts/restore.sh --target drill --snapshot latest   # drill: isolated, port 8124, does not touch prod
+#     ./scripts/restore.sh --target prod  --snapshot latest   # for real: stops prod, overwrites its data
 #
-# Restores /config (entity registry, Zigbee network database, dashboards) and
-# the recorder database. See docs/disaster-recovery.md for the full bare-metal
-# sequence and the drill checklist.
+# Port of the k8s version — no kubectl, no scratch namespace. A dedicated
+# bridge network plus a second, throwaway Postgres container play the role
+# the scratch namespace used to: full isolation from the live install.
+#
+# See docs/disaster-recovery.md for the full sequence and the drill checklist.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-NAMESPACE=""
+TARGET=""
 SNAPSHOT="latest"
 ASSUME_YES=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --namespace) NAMESPACE="${2:?}"; shift 2 ;;
-    --snapshot)  SNAPSHOT="${2:?}";  shift 2 ;;
-    --yes)       ASSUME_YES=1; shift ;;
-    *) echo "usage: $0 --namespace NS [--snapshot ID] [--yes]" >&2; exit 2 ;;
+    --target)   TARGET="${2:?}";   shift 2 ;;
+    --snapshot) SNAPSHOT="${2:?}"; shift 2 ;;
+    --yes)      ASSUME_YES=1; shift ;;
+    *) echo "usage: $0 --target drill|prod [--snapshot ID] [--yes]" >&2; exit 2 ;;
   esac
 done
 
-[[ -n "$NAMESPACE" ]] || { echo "--namespace is required" >&2; exit 2; }
+[[ "$TARGET" == "drill" || "$TARGET" == "prod" ]] \
+  || { echo "usage: $0 --target drill|prod [--snapshot ID] [--yes]" >&2; exit 2; }
 
-KUBECTL="kubectl"
-command -v kubectl >/dev/null 2>&1 || KUBECTL="microk8s kubectl"
+RESTIC_IMAGE="restic/restic:0.17.3"
+STAGING=$(mktemp -d)
+trap 'rm -rf "$STAGING"' EXIT
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+
+if [[ "$TARGET" == "prod" ]]; then
+  CONFIG_DIR="/var/lib/smart-home-and-hearth/ha-config"
+else
+  CONFIG_DIR="/var/lib/smart-home-and-hearth-drill/ha-config"
+fi
 
 # ── Guard rail ──────────────────────────────────────────────────────────────
 # Restoring over a live install destroys current state. Make that a deliberate,
 # typed decision rather than a flag someone copy-pastes.
-if [[ "$NAMESPACE" == "ha-prod" && $ASSUME_YES -eq 0 ]]; then
+if [[ "$TARGET" == "prod" && $ASSUME_YES -eq 0 ]]; then
   cat >&2 <<EOF
 
   ┌────────────────────────────────────────────────────────────────────┐
   │  You are about to restore over the LIVE Home Assistant install.    │
   │                                                                    │
-  │  This overwrites /config — the entity registry, the Zigbee network │
-  │  database and every dashboard — and replaces the recorder database │
-  │  with the contents of snapshot: ${SNAPSHOT}
+  │  This overwrites ${CONFIG_DIR}
+  │  — the entity registry, the Zigbee network database and every     │
+  │  dashboard — with the contents of snapshot: ${SNAPSHOT}
   │                                                                    │
   │  Current state that is not in the snapshot will be lost.           │
   │                                                                    │
-  │  If you are testing the backup, use a scratch namespace instead:   │
-  │      $0 --namespace ha-drill                                       │
+  │  If you are testing the backup, use the drill target instead:      │
+  │      $0 --target drill                                             │
   └────────────────────────────────────────────────────────────────────┘
 
 EOF
-  read -rp "  Type the namespace to confirm: " confirm
-  [[ "$confirm" == "ha-prod" ]] || { echo "  Aborted."; exit 1; }
+  read -rp "  Type 'prod' to confirm: " confirm
+  [[ "$confirm" == "prod" ]] || { echo "  Aborted."; exit 1; }
 fi
 
-# ── 1. Stop writers ─────────────────────────────────────────────────────────
+# ── 1. Stop writers ──────────────────────────────────────────────────────────
 # Restoring underneath a running recorder produces a corrupt result.
-say "Scaling down Home Assistant"
-$KUBECTL -n "$NAMESPACE" scale deploy/homeassistant --replicas=0 --ignore-not-found
-$KUBECTL -n "$NAMESPACE" wait --for=delete pod \
-  -l app.kubernetes.io/name=homeassistant --timeout=120s 2>/dev/null || true
+if [[ "$TARGET" == "prod" ]]; then
+  say "Stopping Home Assistant"
+  sudo systemctl stop homeassistant.service
+fi
 
-# ── 2. Restore /config ──────────────────────────────────────────────────────
-say "Restoring /config from snapshot ${SNAPSHOT}"
-$KUBECTL -n "$NAMESPACE" delete job restore-config --ignore-not-found
-cat <<EOF | $KUBECTL -n "$NAMESPACE" apply -f -
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: restore-config
-spec:
-  backoffLimit: 1
-  template:
-    spec:
-      restartPolicy: Never
-      nodeSelector:
-        kubernetes.io/hostname: henrybook
-      containers:
-        - name: restic
-          image: restic/restic:0.17.3
-          command: ["/bin/sh", "-eu", "-c"]
-          args:
-            - |
-              echo "==> restoring /config"
-              # --target / because the snapshot stores absolute paths.
-              restic restore ${SNAPSHOT} --target / --include /config
-              echo "==> staging files (database dump, sealing keys)"
-              restic restore ${SNAPSHOT} --target /staging-out --include /staging
-              ls -lh /staging-out/staging/
-          env:
-            - name: RESTIC_REPOSITORY
-              valueFrom: { secretKeyRef: { name: restic, key: repository } }
-            - name: RESTIC_PASSWORD
-              valueFrom: { secretKeyRef: { name: restic, key: password } }
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom: { secretKeyRef: { name: restic, key: aws-access-key-id } }
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom: { secretKeyRef: { name: restic, key: aws-secret-access-key } }
-          volumeMounts:
-            - { name: config, mountPath: /config }
-            - { name: staging, mountPath: /staging-out }
-      volumes:
-        - name: config
-          persistentVolumeClaim: { claimName: ha-config }
-        - name: staging
-          emptyDir: {}
-EOF
+# ── 2. Restore config + the staged DB dump ──────────────────────────────────
+say "Restoring config from snapshot ${SNAPSHOT}"
+sudo mkdir -p "$CONFIG_DIR"
+podman run --rm \
+  -e RESTIC_REPOSITORY -e RESTIC_PASSWORD -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+  -v "$CONFIG_DIR:/config" \
+  -v "$STAGING:/staging-out" \
+  "$RESTIC_IMAGE" sh -eu -c "
+    restic restore '${SNAPSHOT}' --target / --include /config
+    restic restore '${SNAPSHOT}' --target /staging-out --include /staging
+    ls -lh /staging-out/staging/
+  "
 
-$KUBECTL -n "$NAMESPACE" wait --for=condition=complete job/restore-config --timeout=1800s
-$KUBECTL -n "$NAMESPACE" logs job/restore-config
+if [[ "$TARGET" == "prod" ]]; then
+  cat <<NOTE
 
-# ── 3. Restore the database ─────────────────────────────────────────────────
-say "Restoring the recorder database"
-$KUBECTL -n "$NAMESPACE" scale statefulset/postgres --replicas=1
-$KUBECTL -n "$NAMESPACE" rollout status statefulset/postgres --timeout=300s
+  The database dump was restored to:
+      ${STAGING}/staging/homeassistant.dump
 
-cat <<'NOTE'
+  It is not automatically loaded — pg_restore over a live database is
+  destructive and deserves an explicit step. Run it now, then bring Home
+  Assistant back up:
 
-  The database dump was restored to a temporary volume inside the job above and
-  is not automatically loaded — pg_restore over a live database is destructive
-  and deserves an explicit step. Run it now:
+    podman exec -i postgres sh -c \\
+      'pg_restore -U "\$POSTGRES_USER" -d homeassistant --clean --if-exists' \\
+      < ${STAGING}/staging/homeassistant.dump
 
-    kubectl -n NAMESPACE exec -i sts/postgres -- \
-      pg_restore -U ha -d homeassistant --clean --if-exists < homeassistant.dump
-
-  Pull the dump out of the restore job first if you need it locally:
-
-    kubectl -n NAMESPACE cp restore-config-POD:/staging-out/staging/homeassistant.dump ./homeassistant.dump
+    sudo systemctl start homeassistant.service
 
 NOTE
+  exit 0
+fi
 
-# ── 4. Back up ──────────────────────────────────────────────────────────────
-say "Scaling Home Assistant back up"
-$KUBECTL -n "$NAMESPACE" scale deploy/homeassistant --replicas=1
-$KUBECTL -n "$NAMESPACE" rollout status deploy/homeassistant --timeout=900s
+# ── 3. Drill: fully isolated, never touches prod's Postgres ────────────────
+say "Setting up an isolated drill environment"
+podman network exists ha-drill || podman network create ha-drill
 
-cat <<EOF
+DRILL_PG_DIR="/var/lib/smart-home-and-hearth-drill/postgres"
+sudo mkdir -p "$DRILL_PG_DIR"
+sudo chown -R 999:999 "$DRILL_PG_DIR"
 
-Restore complete for ${NAMESPACE}.
+say "Starting a scratch Postgres (does not touch the prod database)"
+podman rm -f postgres-drill >/dev/null 2>&1 || true
+podman run -d --name postgres-drill --network ha-drill \
+  -e POSTGRES_DB=homeassistant -e POSTGRES_USER=ha -e POSTGRES_PASSWORD=drill \
+  -v "$DRILL_PG_DIR:/var/lib/postgresql/data" \
+  docker.io/library/postgres:16-alpine
+until podman exec postgres-drill pg_isready -U ha -d homeassistant >/dev/null 2>&1; do sleep 1; done
+
+say "Restoring the database dump into the drill Postgres"
+podman exec -i postgres-drill pg_restore -U ha -d homeassistant --clean --if-exists \
+  < "$STAGING/staging/homeassistant.dump"
+
+say "Pointing the drill config at the drill database"
+sed -i.bak -E 's#^recorder_db_url:.*#recorder_db_url: "postgresql://ha:drill@postgres-drill:5432/homeassistant"#' \
+  "$CONFIG_DIR/secrets.yaml"
+
+say "Starting a scratch Home Assistant (bridge network, port 8124 — no Zigbee dongle, prod owns it)"
+podman rm -f homeassistant-drill >/dev/null 2>&1 || true
+podman run -d --name homeassistant-drill --network ha-drill \
+  -p 127.0.0.1:8124:8123 \
+  -e TZ=Europe/Stockholm \
+  -v "$CONFIG_DIR:/config" \
+  ghcr.io/home-assistant/home-assistant:2026.7.4
+
+cat <<NOTE
+
+Drill environment is up: http://127.0.0.1:8124
 
 Verify — this is the part that matters (docs/disaster-recovery.md § The restore drill):
 
-  kubectl -n ${NAMESPACE} port-forward deploy/homeassistant 8124:8123
+  [ ] It loads and you can log in with your EXISTING password
+  [ ] Devices and entities are present with their ORIGINAL entity IDs
+  [ ] Dashboards render as you built them
+  [ ] History shows data from before the snapshot (proves the pg_restore)
+  [ ] ZHA reports a coordinator even with no dongle attached (proves zigbee.db restored)
 
-  [ ] logs, and you can sign in with your EXISTING password
-  [ ] devices and entities present with their ORIGINAL entity IDs
-  [ ] dashboards render as you built them
-  [ ] history shows data from before the snapshot
-  [ ] ZHA reports a coordinator (proves zigbee.db restored)
+Tear down when done:
 
-If any of those fail, the backup is not doing its job. Fix it while you still
-have the original.
-EOF
+  podman rm -f homeassistant-drill postgres-drill
+  sudo rm -rf /var/lib/smart-home-and-hearth-drill
+  podman network rm ha-drill
+
+If any check fails, the backup is not doing its job — fix it now, while you
+still have the original.
+NOTE
