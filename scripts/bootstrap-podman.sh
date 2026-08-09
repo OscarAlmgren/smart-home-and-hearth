@@ -70,16 +70,21 @@ Podman is ready. Remaining steps, in order:
   2. Start Thread/Matter — podman/otbr.container already has the real device
      path for the reflashed Sonoff dongle (confirmed unchanged from its
      Zigbee-firmware days, see docs/hardware.md § Radios). If the dongle is
-     ever swapped, re-run `ls -l /dev/serial/by-id/` and update it there:
-         sudo systemctl enable --now otbr.service
-         sudo systemctl enable --now matter-server.service
+     ever swapped, re-run `ls -l /dev/serial/by-id/` and update it there.
+
+     NOTE: these are Quadlet units (podman/*.container) — systemd's own
+     `enable` doesn't apply to them (their WantedBy= is already applied by
+     the generator at daemon-reload, which just ran above). Just start them:
+         sudo systemctl start otbr.service
+         sudo systemctl start matter-server.service
 
      Zigbee is deferred until a separate dongle is available — see
      docs/hardware.md § Radios.
 
-  3. Start Home Assistant:
-         sudo systemctl enable --now ha-sync-config.service
-         sudo systemctl enable --now homeassistant.service
+  3. Start Home Assistant (also a Quadlet unit — `start`, not `enable`;
+     ha-sync-config.service starts automatically as its dependency, no
+     separate step needed):
+         sudo systemctl start homeassistant.service
 
   4. OPTIONAL — backups. Skip this for a first deploy. podman/backup.service
      and backup.timer are already installed, but the timer is NOT enabled
