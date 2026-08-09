@@ -67,10 +67,10 @@ Podman is ready. Remaining steps, in order:
          # edit both with real values
          chmod 600 config/secrets.yaml .env.prod.secret
 
-  2. Put the actual Thread (OTBR) device path into podman/otbr.container —
-     this is the Sonoff dongle, reflashed with OpenThread RCP firmware:
-         ls -l /dev/serial/by-id/
-     Then start Thread/Matter:
+  2. Start Thread/Matter — podman/otbr.container already has the real device
+     path for the reflashed Sonoff dongle (confirmed unchanged from its
+     Zigbee-firmware days, see docs/hardware.md § Radios). If the dongle is
+     ever swapped, re-run `ls -l /dev/serial/by-id/` and update it there:
          sudo systemctl enable --now otbr.service
          sudo systemctl enable --now matter-server.service
 

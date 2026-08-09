@@ -68,9 +68,12 @@ own OTBR/Matter Server add-ons only exist under HAOS's supervisor. This is
 prioritized ahead of Zigbee; see CLAUDE.md § Deferred work.
 
 **Same placement rule as below applies** — USB 2.0 port, on an extension
-cable, referenced by `/dev/serial/by-id/` (the by-id string changed when the
-dongle was reflashed; re-run `ls -l /dev/serial/by-id/` to get the new one).
-Put that path in `podman/otbr.container`.
+cable, referenced by `/dev/serial/by-id/`. Confirmed on henrybook: the by-id
+string is unchanged from the Zigbee-firmware days
+(`usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00`) —
+it's derived from the dongle's CP2102N USB-UART bridge chip, not the EFR32
+application firmware, so reflashing the radio doesn't change it. Already set
+in `podman/otbr.container`.
 
 OTBR also needs the LAN NIC (`enp3s0`) as its backbone/infra interface, and
 IPv6 forwarding enabled on it — see `podman/otbr.container` for the sysctls.

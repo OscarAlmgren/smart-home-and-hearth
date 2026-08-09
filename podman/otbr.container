@@ -28,12 +28,15 @@ ContainerName=otbr
 Network=host
 PodmanArgs=--privileged
 
-# REPLACE_ME: the dongle's by-id path changed when it was reflashed. Re-run
-#   ls -l /dev/serial/by-id/
-# on the server and put the new path here before enabling this unit. Baud
-# rate depends on the exact RCP firmware build flashed — check its docs if
-# the default below doesn't associate.
-AddDevice=/dev/serial/by-id/REPLACE_ME:/dev/ttyOTBR
+# The by-id string is derived from the dongle's onboard CP2102N USB-UART
+# bridge, not the EFR32's application firmware — reflashing the radio from
+# Zigbee EmberZNet to OpenThread RCP does NOT change it. Confirmed on
+# henrybook: still usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_<serial>-if00
+# (no "-port0" suffix on this dongle, unlike the placeholder that used to be
+# here). Re-run `ls -l /dev/serial/by-id/` only if the dongle itself changes.
+# Baud rate depends on the exact RCP firmware build flashed — check its docs
+# if the default below doesn't associate.
+AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00:/dev/ttyOTBR
 
 # Recommended by the upstream Docker guide (https://openthread.io/guides/border-router/docker):
 # lets the container's own DNS/SRP responder resolve Thread hostnames.
