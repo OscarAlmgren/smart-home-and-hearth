@@ -21,34 +21,25 @@ sealing key a restore depends on. Secrets are now plain gitignored files
 this repo's automation (a password manager, same as the restic password
 below).
 
+**OPTIONAL for a first deploy.** `backup.timer` is installed by
+`scripts/bootstrap-podman.sh` but not auto-enabled — see
+[podman-deploy.md](podman-deploy.md). Everything below applies once you've
+filled in real `RESTIC_*`/`AWS_*` credentials and enabled it.
+
 Two stages in one script:
 
-1. **`pg_dump`** of the recorder database, over the network in custom format.
-   Not a filesystem copy of `PGDATA` — copying a data directory from under a
-   running Postgres produces a torn, unrestorable snapshot.
-2. **restic** ships the staged dump plus `/config` to an S3-compatible target,
-   applies retention, and verifies.
+1. **`VACUUM INTO`**, SQLite's own consistent-snapshot command, run inside
+   the `homeassistant` container against the live recorder database. Not a
+   filesystem copy of `home-assistant_v2.db` — copying a WAL-mode SQLite file
+   out from under a running Home Assistant produces a torn, unrestorable
+   snapshot, the same reason `pg_dump` existed when the recorder was Postgres.
+2. **restic** ships the staged snapshot plus `/config` and the OTBR Thread
+   dataset (`/var/lib/smart-home-and-hearth/otbr`) to an S3-compatible
+   target, applies retention, and verifies.
 
 ## What is backed up, in order of criticality
 
-### 1. The Zigbee network database (`/config/zigbee.db`)
-
-Holds the coordinator's network key, PAN ID and the pairing state of every
-Zigbee device.
-
-**Without it you re-pair every Zigbee device in the house by hand** — physically
-visiting each one, including the ones behind furniture and in the ceiling. This
-is the most commonly forgotten file in Home Assistant backups and by far the
-most annoying to lose.
-
-### 2. The recorder database
-
-`pg_dump --format=custom`, which restores with `pg_restore` and survives
-Postgres version changes. This is your history and long-term statistics.
-
-Least critical of the three: losing it costs you graphs, not a working house.
-
-### 3. `/config/.storage/`
+### 1. `/config/.storage/`
 
 The entity registry, device registry, auth tokens, user accounts and dashboards.
 
@@ -59,6 +50,25 @@ Assistant.
 
 Full exclude list and the reasoning:
 [`podman/restic-excludes.txt`](../podman/restic-excludes.txt).
+
+### 2. The OTBR Thread dataset (`/var/lib/smart-home-and-hearth/otbr`)
+
+Holds the Thread network's operational dataset — keys, PAN ID, channel — and
+the pairing state of every Thread/Matter device on it.
+
+**Without it you re-form the Thread mesh and re-join every device by hand**,
+the same failure mode `zigbee.db` is notorious for on a Zigbee network. Once
+a Zigbee dongle is added (see docs/hardware.md § Radios), `/config/zigbee.db`
+becomes equally critical and is already excluded from the general excludes so
+it rides along with the rest of `/config`.
+
+### 3. The recorder database
+
+SQLite, snapshotted via `VACUUM INTO` (see above) — a single file, no
+version-specific restore tooling needed. This is your history and long-term
+statistics.
+
+Least critical of the three: losing it costs you graphs, not a working house.
 
 ## Retention
 
@@ -117,18 +127,15 @@ podman run --rm \
 
 ### The database
 
-```bash
-podman exec -i postgres \
-  pg_restore -U ha -d homeassistant --clean --if-exists < homeassistant.dump
-```
-
-Stop Home Assistant first (`sudo systemctl stop homeassistant.service`) —
+`scripts/restore.sh` handles this automatically — it's a file copy, not a
+version-specific restore tool, once the snapshot's staged out of restic (see
+the script for the exact steps). Stop Home Assistant first
+(`sudo systemctl stop homeassistant.service`) if doing it by hand —
 restoring underneath a running recorder will not end well.
 
 ### Bare metal, from nothing
 
-`scripts/restore.sh --target prod` automates the config + dump half. The full
-sequence:
+`scripts/restore.sh --target prod` automates all of this. The full sequence:
 
 1. Install Ubuntu on the replacement disk.
 2. `scripts/bootstrap-podman.sh` — Podman, runtime directories, Quadlet units.
@@ -136,10 +143,9 @@ sequence:
    manager, not from any automated backup (see the Podman migration note
    above). Nothing else can start until these exist.
 4. `scripts/restore.sh --target prod --snapshot latest` — restores `/config`
-   and stages the database dump.
-5. `pg_restore` the staged dump into Postgres (the script prints the exact
-   command).
-6. `sudo systemctl start homeassistant.service`.
+   (including the recorder DB, installed from the staged `VACUUM INTO`
+   snapshot) and the OTBR Thread dataset, then starts `otbr.service` and
+   `homeassistant.service` itself.
 
 You need exactly three things that are not in git: **the restic password**,
 **`config/secrets.yaml` / `.env.prod.secret`**, and **network access to the
@@ -154,9 +160,10 @@ backup target**.
 months.** It is the acceptance test for the whole project.
 
 ```bash
-# Restores the latest snapshot into an isolated network + scratch Postgres,
-# and brings up a throwaway Home Assistant at http://127.0.0.1:8124
-# (no Zigbee dongle — prod owns it). Does not touch the live install.
+# Restores the latest snapshot into an isolated network, and brings up a
+# throwaway Home Assistant at http://127.0.0.1:8124 (no radios — prod owns
+# them; no scratch database container needed, the recorder DB is a plain
+# SQLite file). Does not touch the live install.
 ./scripts/restore.sh --target drill --snapshot latest
 ```
 
@@ -168,14 +175,17 @@ Check, in the restored instance:
       (proves the registries restored — new IDs mean everything downstream is
       broken)
 - [ ] Dashboards render as you built them
-- [ ] History shows data from before the snapshot (proves the `pg_restore`)
-- [ ] ZHA reports a coordinator, even though the dongle is absent (proves
-      `zigbee.db` restored)
+- [ ] History shows data from before the snapshot (proves the recorder DB restored)
+- [ ] Once Zigbee/Thread devices exist: their registries survive with no
+      radio attached (proves `zigbee.db` / the OTBR Thread dataset restored —
+      the drill above only exercises `/config`; a full Thread-dataset restore
+      test means running `--target prod` for real, or extending the drill to
+      also restore `/otbr` and start a scratch `otbr` container)
 
 Then tear it down (the drill script prints these same commands at the end):
 
 ```bash
-podman rm -f homeassistant-drill postgres-drill
+podman rm -f homeassistant-drill
 sudo rm -rf /var/lib/smart-home-and-hearth-drill
 podman network rm ha-drill
 ```

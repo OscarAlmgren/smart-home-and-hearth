@@ -9,10 +9,11 @@
 # here is either reproducible from git, reproducible by Home Assistant on next
 # start, or captured more reliably somewhere else in the same job.
 
-# The live SQLite files. Nothing should be writing these — the recorder points
-# at Postgres — but if a fallback ever puts them back, a filesystem copy of an
-# open database is torn and unrestorable. The pg_dump initContainer is the real
-# database backup.
+# The LIVE recorder database. This is a WAL-mode SQLite file Home Assistant
+# has open continuously — a filesystem copy of it mid-write is torn and
+# unrestorable. scripts/backup.sh takes a consistent snapshot via SQLite's
+# VACUUM INTO into /staging before this job runs; that staged copy (backed up
+# from /staging, not from here) is the real database backup.
 /config/home-assistant_v2.db
 /config/home-assistant_v2.db-shm
 /config/home-assistant_v2.db-wal

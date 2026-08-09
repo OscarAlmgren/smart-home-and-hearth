@@ -1,0 +1,68 @@
+# OpenThread Border Router — containerized, since HA's OTBR add-on is only
+# available under HAOS's supervisor, not a bare Podman/HA install.
+#
+# This is the same Sonoff dongle originally bought for Zigbee, reflashed with
+# OpenThread RCP firmware — Thread/Matter is being brought up first, Zigbee
+# deferred until a separate dongle is available (see docs/hardware.md § Radios,
+# CLAUDE.md § Deferred work). Concurrent Zigbee+Thread on one radio needs
+# Silicon Labs multiprotocol firmware, which upstream has deprecated — so this
+# dongle is Thread-only now, not shared.
+#
+# Install: copy into /etc/containers/systemd/, same as the other units here.
+# See docs/podman-deploy.md.
+[Unit]
+Description=OpenThread Border Router (Thread/Matter radio)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/openthread/otbr:latest
+ContainerName=otbr
+
+# host networking + privileged: OTBR manipulates the host's IPv6 routing
+# table, runs its own mDNS/SRP responder, and needs raw netlink access for
+# NAT66/backbone routing onto the LAN — same class of reason
+# homeassistant.container already runs privileged/host-network. There's only
+# one physical NIC on this box (enp3s0, see docs/hardware.md), so that's the
+# backbone/infra interface below.
+Network=host
+PodmanArgs=--privileged
+
+# REPLACE_ME: the dongle's by-id path changed when it was reflashed. Re-run
+#   ls -l /dev/serial/by-id/
+# on the server and put the new path here before enabling this unit. Baud
+# rate depends on the exact RCP firmware build flashed — check its docs if
+# the default below doesn't associate.
+AddDevice=/dev/serial/by-id/REPLACE_ME:/dev/ttyOTBR
+
+# Recommended by the upstream Docker guide (https://openthread.io/guides/border-router/docker):
+# lets the container's own DNS/SRP responder resolve Thread hostnames.
+DNS=127.0.0.1
+Sysctl=net.ipv6.conf.all.disable_ipv6=0
+Sysctl=net.ipv4.conf.all.forwarding=1
+Sysctl=net.ipv6.conf.all.forwarding=1
+
+# Persists the Thread network dataset (keys, PAN ID, channel) across
+# container recreation — losing this means re-forming the Thread network and
+# re-joining every device, the Thread equivalent of zigbee.db.
+Volume=/var/lib/smart-home-and-hearth/otbr:/var/lib/thread
+
+# -B <infra-if> is the backbone/infra interface (the LAN NIC). Verify the
+# port OTBR's REST API listens on for your image tag before relying on this
+# healthcheck — it has moved across OTBR releases.
+Exec=--radio-url spinel+hdlc+uart:///dev/ttyOTBR?uart-baudrate=460800 -B enp3s0
+
+HealthCmd=wget --quiet --tries=1 --spider http://localhost:8081/node/state || exit 1
+HealthInterval=30s
+HealthTimeout=10s
+HealthStartPeriod=60s
+HealthOnFailure=restart
+
+[Service]
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target default.target

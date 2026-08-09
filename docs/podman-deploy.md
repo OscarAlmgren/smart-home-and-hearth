@@ -1,9 +1,9 @@
 # Podman deployment (replaces MicroK8s)
 
-**Status: Home Assistant + Postgres + backup/restore.** Monitoring (Alloy)
-and the git-pull deploy loop that replaces Argo CD are not ported yet. `k8s/`
-and `argocd/` are left in place for reference until the cutover is confirmed
-working; they are not deleted by this doc.
+**Status: Home Assistant (SQLite recorder) + OTBR/Matter + backup/restore.**
+Monitoring (Alloy) and the git-pull deploy loop that replaces Argo CD are not
+ported yet. `k8s/` and `argocd/` are left in place for reference until the
+cutover is confirmed working; they are not deleted by this doc.
 
 ## Why
 
@@ -26,26 +26,28 @@ shape, not new territory for this hardware.
 | `Deployment` / `StatefulSet` | Quadlet `.container` unit → systemd service |
 | PVC (`hostpath-storage`) | Bind mount under `/var/lib/smart-home-and-hearth/` |
 | `sync-config` initContainer | `scripts/sync-ha-config.sh`, run by `ha-sync-config.service` before Home Assistant starts |
-| Sealed Secrets | Plain files: `config/secrets.yaml` (HA's own secrets) + `.env.prod.secret` (Postgres/Grafana Cloud/restic credentials), both gitignored, `chmod 600` |
+| Sealed Secrets | Plain files: `config/secrets.yaml` (HA's own secrets) + `.env.prod.secret` (Grafana Cloud/restic credentials), both gitignored, `chmod 600` |
 | `livenessProbe` / `readinessProbe` | `HealthCmd=` + `HealthOnFailure=restart` |
 | CrashLoopBackOff | `StartLimitBurst=5` / `StartLimitIntervalSec=600` in `[Service]` — 5 restarts in 10 minutes, then stop and require a human, same shape the Argo CD `retry:` block used |
 | Backup `CronJob` | `podman/backup.timer` + `podman/backup.service`, running `scripts/backup.sh` — see docs/disaster-recovery.md |
-| `scripts/restore.sh` (scratch namespace) | `scripts/restore.sh --target drill` — scratch bridge network + throwaway Postgres instead of a namespace |
+| `scripts/restore.sh` (scratch namespace) | `scripts/restore.sh --target drill` — scratch bridge network instead of a namespace (no scratch DB container needed; the recorder DB is a SQLite file that restores with the rest of `/config`) |
 | Argo CD GitOps sync | Not yet ported — see Known gaps below |
+
+Also new since the MicroK8s version and not a straight port of anything:
+`podman/otbr.container` + `podman/matter-server.container`, the containerized
+OpenThread Border Router and Matter Server that replace HAOS's supervisor
+add-ons — see docs/hardware.md § Radios.
 
 ## Secrets
 
 Two files, both gitignored, both `chmod 600`, neither ever committed:
 
 - **`config/secrets.yaml`** — copy from `config/secrets.yaml.example`. Home
-  Assistant's own secrets (home name/location, `recorder_db_url` with the
-  Postgres credentials embedded in the connection string, the Prometheus
-  token used for documentation).
-- **`.env.prod.secret`** — copy from `.env.prod.secret.example`. Postgres's
-  own `POSTGRES_USER`/`POSTGRES_PASSWORD` (**must match** what's embedded in
-  `recorder_db_url` above — nothing checks this automatically, same caveat
-  the Sealed Secret version had), Grafana Cloud credentials, restic
-  credentials.
+  Assistant's own secrets (home name/location, `recorder_db_url` pointing at
+  the SQLite recorder DB, the Prometheus token used for documentation).
+- **`.env.prod.secret`** — copy from `.env.prod.secret.example`. Grafana
+  Cloud credentials (not yet wired to anything — see Known gaps) and restic
+  credentials (optional for a first deploy — see docs/disaster-recovery.md).
 
 ## Install
 
@@ -55,24 +57,25 @@ cd /home/oscaralmgren/smart-home-and-hearth
 ./scripts/bootstrap-podman.sh
 ```
 
-Follow the printed next steps (secrets, Zigbee device path, enabling the
-units). Full sequence is in `scripts/bootstrap-podman.sh`'s own output.
+Follow the printed next steps (secrets, OTBR/Zigbee device paths, enabling
+the units). Full sequence is in `scripts/bootstrap-podman.sh`'s own output.
 
 ## Verification
 
 ```bash
-systemctl status postgres.service homeassistant.service ha-sync-config.service
+systemctl status homeassistant.service ha-sync-config.service otbr.service matter-server.service
 journalctl -u homeassistant.service -f          # watch first boot
 curl -sf http://localhost:8123/ >/dev/null && echo ok
-podman exec postgres psql -U ha -d homeassistant -c '\dt'   # HA tables exist
+ls -lh /var/lib/smart-home-and-hearth/ha-config/home-assistant_v2.db   # recorder DB exists
 ```
 
 - [ ] Home Assistant reachable at `http://<server-ip>:8123`; onboarding completes
-- [ ] Recorder is on Postgres — `\dt` shows HA tables, **no `home-assistant_v2.db`** in `/var/lib/smart-home-and-hearth/ha-config`
-- [ ] `systemctl reboot` — all three units come back on their own (`WantedBy=multi-user.target`)
+- [ ] Recorder is on SQLite — `home-assistant_v2.db` exists in `/var/lib/smart-home-and-hearth/ha-config`, no `postgres` container running
+- [ ] `journalctl -u otbr.service -f` shows a healthy Thread network; add the Matter integration in HA pointing at `ws://127.0.0.1:5580/ws`
+- [ ] `systemctl reboot` — all units come back on their own (`WantedBy=multi-user.target`)
 - [ ] Edit `config/configuration.yaml` in git, `git pull` on the server, `systemctl restart homeassistant.service` — change takes effect (manual for now; see Known gaps)
-- [ ] `sudo systemctl start backup.service` (runs it once, on demand) completes without error — `journalctl -u backup.service`
-- [ ] **Restore drill** — `./scripts/restore.sh --target drill --snapshot latest`, then work through the checklist in docs/disaster-recovery.md § The restore drill. Do this before trusting this deployment with anything real.
+- [ ] **Optional, not required for a first deploy** — once real `RESTIC_*`/`AWS_*` values are in `.env.prod.secret` and `backup.timer` is enabled: `sudo systemctl start backup.service` (runs it once, on demand) completes without error — `journalctl -u backup.service`
+- [ ] **Restore drill**, once backups are enabled — `./scripts/restore.sh --target drill --snapshot latest`, then work through the checklist in docs/disaster-recovery.md § The restore drill. Do this before trusting backups with anything real.
 
 ## MicroK8s decommissioning
 

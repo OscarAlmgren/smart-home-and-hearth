@@ -23,7 +23,7 @@ Approximate budget against ~12 GiB usable:
 |---|---|
 | Ubuntu Server | ~4 GB |
 | MicroK8s snap (plus retained revisions) | ~1 GB |
-| Container images (HA ~2 GB, Postgres, Alloy, Argo CD, Calico, KSM) | ~5 GB |
+| Container images (HA ~2 GB, OTBR, matter-server, Alloy, Argo CD, Calico, KSM) | ~5 GB |
 | PVCs | 0.8 GB |
 | **Total** | **~11 of 12 GiB** |
 
@@ -51,14 +51,37 @@ continuously. Mitigations already in the config:
 
 - `packages/recorder.yaml` excludes chatty entities and raises `commit_interval`.
 - `purge_keep_days: 7` while on flash.
-- Postgres data moves to the HDD when it arrives.
+- The recorder DB (`home-assistant_v2.db`, SQLite) moves to the HDD when it arrives.
 
 **Nothing important may live only on this flash module.** See
 [disaster-recovery.md](disaster-recovery.md).
 
 ## Radios
 
-### Zigbee — Sonoff Zigbee 3.0 USB Dongle Plus
+### Thread/Matter — Sonoff dongle, reflashed with OpenThread RCP (active)
+
+The Sonoff dongle originally bought for Zigbee has been reflashed with
+**OpenThread RCP** firmware and is now the Thread radio, run through a
+containerized OpenThread Border Router (`podman/otbr.container`) plus
+`python-matter-server` (`podman/matter-server.container`) — Home Assistant's
+own OTBR/Matter Server add-ons only exist under HAOS's supervisor. This is
+prioritized ahead of Zigbee; see CLAUDE.md § Deferred work.
+
+**Same placement rule as below applies** — USB 2.0 port, on an extension
+cable, referenced by `/dev/serial/by-id/` (the by-id string changed when the
+dongle was reflashed; re-run `ls -l /dev/serial/by-id/` to get the new one).
+Put that path in `podman/otbr.container`.
+
+OTBR also needs the LAN NIC (`enp3s0`) as its backbone/infra interface, and
+IPv6 forwarding enabled on it — see `podman/otbr.container` for the sysctls.
+
+### Zigbee — deferred, needs its own dongle
+
+Concurrent Zigbee+Thread on one radio requires Silicon Labs multiprotocol RCP
+firmware, which Home Assistant has deprecated and stopped recommending after
+sustained reports of degraded Zigbee reliability — so Zigbee is deferred until
+a **separate** Sonoff Zigbee 3.0 USB Dongle Plus is available for it, rather
+than sharing the one now dedicated to Thread.
 
 **Plug it into a USB 2.0 port, on an extension cable.**
 
@@ -75,30 +98,16 @@ ls -l /dev/serial/by-id/
 # usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_<serial>-if00-port0
 ```
 
-Put that path in `k8s/overlays/prod/` — the manifest mounts it at `/dev/zigbee`
-inside the pod. Kernel enumeration order changes across reboots, so
-`/dev/ttyACM0` will eventually point at the wrong radio.
-
-### Thread — second dongle, phase 2
-
-A second Sonoff dongle, flashed with **OpenThread RCP** firmware, dedicated to
-Thread.
-
-Deliberately *not* using one dongle for both: running Zigbee and Thread
-concurrently on a single radio requires Silicon Labs multiprotocol RCP firmware,
-which Home Assistant has deprecated and stopped recommending after sustained
-reports of degraded Zigbee reliability. Two cheap dongles are the supported
-path.
-
-Thread and Matter also need `otbr` and `matter-server` pods, both on
-`hostNetwork` with working IPv6 on the LAN. That is phase 2 work.
+Put that path in `podman/homeassistant.container`'s commented `AddDevice=`
+line. Kernel enumeration order changes across reboots, so `/dev/ttyACM0` will
+eventually point at the wrong radio.
 
 ## Planned additions
 
 | Item | Purpose | Status |
 |---|---|---|
-| Larger HDD | Container images, Postgres data, restic repo | ☐ not fitted — **gates storage changes** |
-| Second Sonoff dongle (OpenThread RCP) | Thread border router | ☐ phase 2 |
+| Larger HDD | Container images, recorder DB, restic repo | ☐ not fitted — **gates storage changes** |
+| Second Sonoff dongle | Zigbee (deferred — original dongle now runs Thread) | ☐ deferred |
 | Raspberry Pi + MinIO | S3 backup target on the LAN | ☐ phase 1 backup target |
 
 MinIO on the LAN is **not offsite** — a fire, theft or power event takes both

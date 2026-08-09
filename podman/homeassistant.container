@@ -12,9 +12,9 @@
 # See docs/podman-deploy.md.
 [Unit]
 Description=Home Assistant
-After=network-online.target ha-sync-config.service postgres.service
+After=network-online.target ha-sync-config.service
 Wants=network-online.target
-Requires=ha-sync-config.service postgres.service
+Requires=ha-sync-config.service
 
 [Container]
 # HA_VERSION must match .env.prod — scripts/deploy.sh checks this before
@@ -33,8 +33,10 @@ Volume=/var/lib/smart-home-and-hearth/ha-config:/config
 # Home Assistant reads /etc/localtime in addition to TZ.
 Volume=/etc/localtime:/etc/localtime:ro
 
-# Zigbee: not fitted yet (docs/hardware.md — Planned additions). Once the
-# Sonoff dongle is in a USB 2.0 port:
+# Zigbee: deferred (docs/hardware.md — Radios). The original Sonoff dongle
+# has been reflashed for Thread instead and is now owned by otbr.container —
+# see podman/otbr.container. Zigbee needs its own dongle before this can be
+# uncommented. Once one is fitted, in a USB 2.0 port:
 #   ls -l /dev/serial/by-id/
 # and uncomment, using that path. Never /dev/ttyACM0 — kernel enumeration
 # order changes across reboots and will silently point ZHA at the wrong radio.
@@ -58,8 +60,8 @@ HealthRetries=5
 HealthOnFailure=restart
 
 [Service]
-# Same reasoning as postgres.container: cap at 5 restarts in 10 minutes, then
-# stop and require a human, rather than restarting forever.
+# Same reasoning as the other units in podman/: cap at 5 restarts in 10
+# minutes, then stop and require a human, rather than restarting forever.
 Restart=on-failure
 RestartSec=10
 StartLimitIntervalSec=600

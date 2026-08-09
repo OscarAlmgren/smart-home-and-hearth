@@ -41,17 +41,17 @@ say "Podman version: $podman_major_minor"
 
 # ── Runtime directories ─────────────────────────────────────────────────────
 # Deliberately outside the git checkout: `git clean`/`git pull` must never be
-# able to touch runtime state (recorder DB, .storage, entity registry).
+# able to touch runtime state (recorder DB — a SQLite file under ha-config,
+# .storage, entity registry, Thread network dataset).
 say "Creating runtime data directories"
 sudo mkdir -p /var/lib/smart-home-and-hearth/ha-config
-sudo mkdir -p /var/lib/smart-home-and-hearth/postgres
-# Postgres in the official image runs as uid 999.
-sudo chown -R 999:999 /var/lib/smart-home-and-hearth/postgres
+sudo mkdir -p /var/lib/smart-home-and-hearth/otbr
+sudo mkdir -p /var/lib/smart-home-and-hearth/matter-server
 
 # ── Quadlets and plain units ─────────────────────────────────────────────────
 say "Installing Quadlet units"
 sudo mkdir -p /etc/containers/systemd
-sudo cp podman/postgres.container podman/homeassistant.container /etc/containers/systemd/
+sudo cp podman/homeassistant.container podman/otbr.container podman/matter-server.container /etc/containers/systemd/
 sudo cp podman/ha-sync-config.service podman/backup.service podman/backup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 
@@ -64,23 +64,29 @@ Podman is ready. Remaining steps, in order:
      Secrets — see docs/podman-deploy.md § Secrets):
          cp config/secrets.yaml.example config/secrets.yaml
          cp .env.prod.secret.example .env.prod.secret
-         # edit both with real values — POSTGRES_USER/PASSWORD in
-         # .env.prod.secret MUST match the credentials embedded in
-         # config/secrets.yaml's recorder_db_url
+         # edit both with real values
          chmod 600 config/secrets.yaml .env.prod.secret
 
-  2. Put the actual Zigbee device path into podman/homeassistant.container
-     once the dongle is fitted:
+  2. Put the actual Thread (OTBR) device path into podman/otbr.container —
+     this is the Sonoff dongle, reflashed with OpenThread RCP firmware:
          ls -l /dev/serial/by-id/
+     Then start Thread/Matter:
+         sudo systemctl enable --now otbr.service
+         sudo systemctl enable --now matter-server.service
 
-  3. Start it:
-         sudo systemctl enable --now postgres.service
+     Zigbee is deferred until a separate dongle is available — see
+     docs/hardware.md § Radios.
+
+  3. Start Home Assistant:
          sudo systemctl enable --now ha-sync-config.service
          sudo systemctl enable --now homeassistant.service
-         sudo systemctl enable --now backup.timer
 
-  4. Run the restore drill BEFORE trusting any of this — see
-     docs/disaster-recovery.md § The restore drill:
+  4. OPTIONAL — backups. Skip this for a first deploy. podman/backup.service
+     and backup.timer are already installed, but the timer is NOT enabled
+     above: with placeholder RESTIC_*/AWS_* values it would just fail every
+     night at 03:15. When you're ready (see docs/disaster-recovery.md):
+         # fill in real RESTIC_*/AWS_* values in .env.prod.secret first
+         sudo systemctl enable --now backup.timer
          ./scripts/restore.sh --target drill --snapshot latest
 
   5. Verify:      docs/podman-deploy.md § Verification

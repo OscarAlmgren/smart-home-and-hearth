@@ -7,8 +7,8 @@
 # eventually gave up and surfaced as a failed Job.
 [Unit]
 Description=Backup Home Assistant config + database to restic
-After=postgres.service
-Requires=postgres.service
+After=homeassistant.service
+Requires=homeassistant.service
 
 [Service]
 Type=oneshot

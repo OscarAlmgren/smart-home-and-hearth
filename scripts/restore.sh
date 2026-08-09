@@ -5,8 +5,10 @@
 #     ./scripts/restore.sh --target prod  --snapshot latest   # for real: stops prod, overwrites its data
 #
 # Port of the k8s version — no kubectl, no scratch namespace. A dedicated
-# bridge network plus a second, throwaway Postgres container play the role
-# the scratch namespace used to: full isolation from the live install.
+# bridge network plays the role the scratch namespace used to: full
+# isolation from the live install. No scratch database container is needed
+# anymore — the recorder DB is SQLite, a single file that comes back with the
+# rest of /config, not a separate dump/restore pipeline.
 #
 # See docs/disaster-recovery.md for the full sequence and the drill checklist.
 set -euo pipefail
@@ -37,6 +39,7 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 if [[ "$TARGET" == "prod" ]]; then
   CONFIG_DIR="/var/lib/smart-home-and-hearth/ha-config"
+  OTBR_DIR="/var/lib/smart-home-and-hearth/otbr"
 else
   CONFIG_DIR="/var/lib/smart-home-and-hearth-drill/ha-config"
 fi
@@ -51,8 +54,9 @@ if [[ "$TARGET" == "prod" && $ASSUME_YES -eq 0 ]]; then
   │  You are about to restore over the LIVE Home Assistant install.    │
   │                                                                    │
   │  This overwrites ${CONFIG_DIR}
-  │  — the entity registry, the Zigbee network database and every     │
-  │  dashboard — with the contents of snapshot: ${SNAPSHOT}
+  │  and the OTBR Thread dataset — the entity registry, the recorder    │
+  │  database and every dashboard — with the contents of snapshot:      │
+  │  ${SNAPSHOT}
   │                                                                    │
   │  Current state that is not in the snapshot will be lost.           │
   │                                                                    │
@@ -66,13 +70,18 @@ EOF
 fi
 
 # ── 1. Stop writers ──────────────────────────────────────────────────────────
-# Restoring underneath a running recorder produces a corrupt result.
+# Restoring underneath a running recorder or a running OTBR agent produces a
+# corrupt result.
 if [[ "$TARGET" == "prod" ]]; then
-  say "Stopping Home Assistant"
-  sudo systemctl stop homeassistant.service
+  say "Stopping Home Assistant and OTBR"
+  sudo systemctl stop homeassistant.service otbr.service
 fi
 
-# ── 2. Restore config + the staged DB dump ──────────────────────────────────
+# ── 2. Restore config + the staged DB snapshot ──────────────────────────────
+# home-assistant_v2.db* is excluded from the /config backup (it's live
+# WAL-mode SQLite — see podman/restic-excludes.txt), so /config comes back
+# without a recorder DB. The consistent snapshot backed up from /staging
+# (scripts/backup.sh's VACUUM INTO output) becomes the restored DB file.
 say "Restoring config from snapshot ${SNAPSHOT}"
 sudo mkdir -p "$CONFIG_DIR"
 podman run --rm \
@@ -85,51 +94,28 @@ podman run --rm \
     ls -lh /staging-out/staging/
   "
 
+say "Installing the restored recorder database"
+sudo cp "$STAGING/staging/home-assistant_v2.db" "$CONFIG_DIR/home-assistant_v2.db"
+sudo rm -f "$CONFIG_DIR/home-assistant_v2.db-shm" "$CONFIG_DIR/home-assistant_v2.db-wal"
+
 if [[ "$TARGET" == "prod" ]]; then
-  cat <<NOTE
+  say "Restoring the OTBR Thread dataset"
+  sudo mkdir -p "$OTBR_DIR"
+  podman run --rm \
+    -e RESTIC_REPOSITORY -e RESTIC_PASSWORD -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+    -v "$OTBR_DIR:/otbr" \
+    "$RESTIC_IMAGE" restic restore "${SNAPSHOT}" --target / --include /otbr
 
-  The database dump was restored to:
-      ${STAGING}/staging/homeassistant.dump
-
-  It is not automatically loaded — pg_restore over a live database is
-  destructive and deserves an explicit step. Run it now, then bring Home
-  Assistant back up:
-
-    podman exec -i postgres sh -c \\
-      'pg_restore -U "\$POSTGRES_USER" -d homeassistant --clean --if-exists' \\
-      < ${STAGING}/staging/homeassistant.dump
-
-    sudo systemctl start homeassistant.service
-
-NOTE
+  say "Starting Home Assistant and OTBR"
+  sudo systemctl start otbr.service homeassistant.service
   exit 0
 fi
 
-# ── 3. Drill: fully isolated, never touches prod's Postgres ────────────────
+# ── 3. Drill: fully isolated, never touches prod ────────────────────────────
 say "Setting up an isolated drill environment"
 podman network exists ha-drill || podman network create ha-drill
 
-DRILL_PG_DIR="/var/lib/smart-home-and-hearth-drill/postgres"
-sudo mkdir -p "$DRILL_PG_DIR"
-sudo chown -R 999:999 "$DRILL_PG_DIR"
-
-say "Starting a scratch Postgres (does not touch the prod database)"
-podman rm -f postgres-drill >/dev/null 2>&1 || true
-podman run -d --name postgres-drill --network ha-drill \
-  -e POSTGRES_DB=homeassistant -e POSTGRES_USER=ha -e POSTGRES_PASSWORD=drill \
-  -v "$DRILL_PG_DIR:/var/lib/postgresql/data" \
-  docker.io/library/postgres:16-alpine
-until podman exec postgres-drill pg_isready -U ha -d homeassistant >/dev/null 2>&1; do sleep 1; done
-
-say "Restoring the database dump into the drill Postgres"
-podman exec -i postgres-drill pg_restore -U ha -d homeassistant --clean --if-exists \
-  < "$STAGING/staging/homeassistant.dump"
-
-say "Pointing the drill config at the drill database"
-sed -i.bak -E 's#^recorder_db_url:.*#recorder_db_url: "postgresql://ha:drill@postgres-drill:5432/homeassistant"#' \
-  "$CONFIG_DIR/secrets.yaml"
-
-say "Starting a scratch Home Assistant (bridge network, port 8124 — no Zigbee dongle, prod owns it)"
+say "Starting a scratch Home Assistant (bridge network, port 8124 — no radios, prod owns them)"
 podman rm -f homeassistant-drill >/dev/null 2>&1 || true
 podman run -d --name homeassistant-drill --network ha-drill \
   -p 127.0.0.1:8124:8123 \
@@ -146,12 +132,13 @@ Verify — this is the part that matters (docs/disaster-recovery.md § The resto
   [ ] It loads and you can log in with your EXISTING password
   [ ] Devices and entities are present with their ORIGINAL entity IDs
   [ ] Dashboards render as you built them
-  [ ] History shows data from before the snapshot (proves the pg_restore)
-  [ ] ZHA reports a coordinator even with no dongle attached (proves zigbee.db restored)
+  [ ] History shows data from before the snapshot (proves the DB restore)
+  [ ] Once Zigbee/Thread devices exist: their registries survive with no
+      radio attached (proves zigbee.db / the Thread dataset restored)
 
 Tear down when done:
 
-  podman rm -f homeassistant-drill postgres-drill
+  podman rm -f homeassistant-drill
   sudo rm -rf /var/lib/smart-home-and-hearth-drill
   podman network rm ha-drill
 

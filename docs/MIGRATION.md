@@ -45,6 +45,21 @@ Phase 1 is **LAN-only**. No Ingress, no cert-manager, no public exposure.
 | HA workload | **Deployment, `strategy: Recreate`** | RollingUpdate deadlocks — two pods cannot both bind host `:8123` or open the same serial device. |
 | Radios | Zigbee in phase 1, Thread in phase 2 | Bluetooth dropped: no adapter present, and host D-Bus in a pod is the most fragile piece. |
 
+**Superseded after the Podman cutover** (this table otherwise reflects the
+MicroK8s-era plan and is kept as history — see docs/podman-deploy.md for what
+actually shipped):
+
+- **Recorder DB → SQLite.** The Postgres decision above assumed a
+  restart-prone hostPath PVC; under Podman, `/config` is a stable bind mount,
+  so that fragility argument no longer applies. Still no live data at the
+  time of the switch, so the same "decide once, no migration" logic applied
+  in reverse. Frees the RAM/service overhead of a dedicated DB container for
+  the OTBR/matter-server containers added at the same time.
+- **Radios → Thread/Matter first, Zigbee deferred.** The single Sonoff
+  dongle was reflashed to OpenThread RCP firmware instead of buying a second
+  one for Thread as originally planned; Zigbee now waits on a dongle of its
+  own. See docs/hardware.md § Radios.
+
 ---
 
 ## Step 1 — Repo hygiene and hardware truth
