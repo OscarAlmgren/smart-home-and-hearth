@@ -38,6 +38,30 @@ Also new since the MicroK8s version and not a straight port of anything:
 OpenThread Border Router and Matter Server that replace HAOS's supervisor
 add-ons — see docs/hardware.md § Radios.
 
+## Host prerequisites
+
+`scripts/bootstrap-podman.sh` installs these automatically from
+`podman/host-config/`, but they're worth knowing about since they don't show
+up anywhere in the Quadlet unit files themselves - it's tempting to put them
+there and they used to be, until reality disagreed:
+
+- **OTBR forwarding sysctls** (`net.ipv4.conf.all.forwarding`,
+  `net.ipv6.conf.all.forwarding`). `otbr.container` used to set these itself
+  via `Sysctl=`, but podman 5.7.0 rejects per-container sysctls under
+  `Network=host` ("can't be set since Network Namespace set to host: invalid
+  argument") - with host networking the container *is* the host netns, so
+  they have to be host-level (`/etc/sysctl.d/99-otbr-forwarding.conf`)
+  instead.
+- **NAT44 kernel modules** (`iptable_nat`, `iptable_mangle`,
+  `iptable_filter`, `ip6table_filter`). OTBR's own container entrypoint runs
+  a NAT44 setup step via legacy `iptables` and `die`s outright if these
+  aren't loaded ("Table does not exist (do you need to insmod?)").
+  `/etc/modules-load.d/otbr-nat-modules.conf` loads them at boot.
+
+Both surfaced the same way: `otbr.service` crash-looping on a fresh start.
+See the Aug 25 incident notes in [disaster-recovery.md](disaster-recovery.md)
+for how much damage a crash loop can do before these were understood.
+
 ## Secrets
 
 Two files, both gitignored, both `chmod 600`, neither ever committed:

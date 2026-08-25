@@ -16,6 +16,18 @@ After=network-online.target ha-sync-config.service
 Wants=network-online.target
 Requires=ha-sync-config.service
 
+# StartLimitIntervalSec/StartLimitBurst only take effect in [Unit] — systemd
+# silently ignores them in [Service] ("Unknown key ... ignoring"), which is
+# where they used to live here. Without them actually applying,
+# Restart=on-failure had no real cap: a broken unit restarts indefinitely,
+# filling the journal/disk over a long outage (see the Aug 25 incident notes
+# in docs/disaster-recovery.md). Burst is set above systemd's default of 5
+# because a legitimate cold start (image pull + Python dependency install on
+# henrybook's hardware) can itself take several minutes and shouldn't be
+# mistaken for crash-looping.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
 [Container]
 # HA_VERSION must match .env.prod — scripts/deploy.sh checks this before
 # restarting the unit, same drift check render-env.sh did for the k8s overlay.
@@ -60,12 +72,8 @@ HealthRetries=5
 HealthOnFailure=restart
 
 [Service]
-# Same reasoning as the other units in podman/: cap at 5 restarts in 10
-# minutes, then stop and require a human, rather than restarting forever.
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=600
-StartLimitBurst=5
 # Home Assistant flushes the recorder and unloads integrations on shutdown —
 # on this CPU that is not instant, and SIGKILLing it mid-write is how
 # databases get corrupted.

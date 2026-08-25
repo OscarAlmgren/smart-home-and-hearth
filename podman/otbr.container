@@ -15,6 +15,18 @@ Description=OpenThread Border Router (Thread/Matter radio)
 After=network-online.target
 Wants=network-online.target
 
+# StartLimitIntervalSec/StartLimitBurst only take effect in [Unit] — systemd
+# silently ignores them in [Service] ("Unknown key ... ignoring"), which is
+# where they used to live here. Without them actually applying,
+# Restart=on-failure had no real cap: a broken container (this exact unit hit
+# this — see the Aug 25 incident notes in docs/disaster-recovery.md) restarts
+# indefinitely, filling the journal/disk over a long outage. Burst is set
+# above systemd's default of 5 because a legitimate cold start (image pull +
+# extract on henrybook's hardware) can itself take a few minutes and
+# shouldn't be mistaken for crash-looping.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
 [Container]
 Image=docker.io/openthread/otbr:latest
 ContainerName=otbr
@@ -41,9 +53,15 @@ AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240
 # Recommended by the upstream Docker guide (https://openthread.io/guides/border-router/docker):
 # lets the container's own DNS/SRP responder resolve Thread hostnames.
 DNS=127.0.0.1
-Sysctl=net.ipv6.conf.all.disable_ipv6=0
-Sysctl=net.ipv4.conf.all.forwarding=1
-Sysctl=net.ipv6.conf.all.forwarding=1
+# NOTE (2026-08-25): Sysctl= lines used to be set here for disable_ipv6=0 and
+# ipv4/ipv6 forwarding=1, but podman 5.7.0 rejects per-container sysctls under
+# Network=host ("can't be set since Network Namespace set to host: invalid
+# argument") — with host networking the container IS the host netns, so these
+# have to be host-level settings instead. See scripts/bootstrap-podman.sh,
+# which now applies /etc/sysctl.d/99-otbr-forwarding.conf and loads the
+# iptable_nat/iptable_mangle/iptable_filter/ip6table_filter kernel modules
+# OTBR's own entrypoint needs for its NAT44 setup (also not optional — it
+# `die`s without them). See docs/podman-deploy.md § Host prerequisites.
 
 # Persists the Thread network dataset (keys, PAN ID, channel) across
 # container recreation — losing this means re-forming the Thread network and
@@ -64,8 +82,6 @@ HealthOnFailure=restart
 [Service]
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target default.target

@@ -15,6 +15,13 @@ Description=Matter Server (Matter/Thread device commissioning for Home Assistant
 After=network-online.target otbr.service
 Wants=network-online.target
 
+# StartLimitIntervalSec/StartLimitBurst only take effect in [Unit] — systemd
+# silently ignores them in [Service] ("Unknown key ... ignoring"), which is
+# where they used to live here. See homeassistant.container for the full
+# explanation (Aug 25 incident notes in docs/disaster-recovery.md).
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
 [Container]
 Image=ghcr.io/home-assistant-libs/python-matter-server:stable
 ContainerName=matter-server
@@ -30,8 +37,6 @@ Volume=/var/lib/smart-home-and-hearth/matter-server:/data
 [Service]
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target default.target

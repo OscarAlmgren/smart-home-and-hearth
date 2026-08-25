@@ -17,31 +17,35 @@ The server is `henrybook`, an **HP t610 WW thin client** (B8C95AA#ABD). Full
 
 ## The disk is the constraint
 
-Approximate budget against ~12 GiB usable:
+The 16 GB flash module (`/dev/sda`, ~9.8 GiB usable on the LVM root `/` after
+partitioning) holds **Ubuntu Server and the Podman packages only**. Everything
+else that isn't inherently OS state lives on the 500 GB Seagate SSHD, fitted
+2026-08-25 and mounted at `/mnt/storage` (see the 2026-08-25 incident in
+[disaster-recovery.md](disaster-recovery.md)):
 
-| Consumer | Size |
+| On `/mnt/storage` | How |
 |---|---|
-| Ubuntu Server | ~4 GB |
-| MicroK8s snap (plus retained revisions) | ~1 GB |
-| Container images (HA ~2 GB, OTBR, matter-server, Alloy, Argo CD, Calico, KSM) | ~5 GB |
-| PVCs | 0.8 GB |
-| **Total** | **~11 of 12 GiB** |
+| Podman image/container store | `graphroot` in `/etc/containers/storage.conf` |
+| Image-pull staging | `image_copy_tmp_dir` in `/etc/containers/containers.conf` — `graphroot` alone does **not** cover this; pulls stage in `/var/tmp` by default regardless of `graphroot` |
+| `/var/lib/smart-home-and-hearth` (config, recorder DB, Thread dataset, Matter data) | root is a symlink to `/mnt/storage/smart-home-and-hearth` — the Quadlet units' `Volume=` paths are unchanged |
 
-That is *before* Home Assistant stores a byte. Canonical recommends 20 GB for
-MicroK8s; this box is under that, knowingly.
+MicroK8s (and the PVC/containerd-data-root budget this section used to
+track) is decommissioned - see
+[podman-deploy.md § MicroK8s decommissioning](podman-deploy.md#microk8s-decommissioning).
 
 Practical rules:
 
-- **Disk exhaustion is the most likely failure mode.** The root-filesystem alert
-  (fires at 80%) is the single most valuable thing in the monitoring stack.
-- Keep the image count minimal. `microk8s ctr images prune` is in the runbook.
-- Snap retains old revisions — `snap set system refresh.retain=2`.
-- When the HDD is fitted, move containerd's data root and the PVC hostpath onto
-  it. **Ask Oscar first** — see [CLAUDE.md](../CLAUDE.md).
-
-`hostpath-storage` **does not enforce PVC size**. A `500Mi` PVC will happily
-consume the whole filesystem. The declared sizes are bookkeeping; monitoring is
-what actually protects you.
+- **Disk exhaustion is the most likely failure mode** — it already happened
+  once (2026-08-25, see disaster-recovery.md), from a crash-looping Quadlet
+  unit, not from legitimate growth. The root-filesystem alert (fires at 80%)
+  is the single most valuable thing in the monitoring stack.
+- `journalctl` is capped at 200M (`/etc/systemd/journald.conf.d/99-cap-size.conf`)
+  so a noisy period can't fill the disk on its own regardless of which
+  service is misbehaving.
+- Swap (`/swapfile`, 1G) stays on the flash module, not `/mnt/storage` —
+  deliberately: swap over the USB-attached SSHD would add real latency and a
+  disconnect/enclosure hiccup under swap pressure risks a hang, and this box
+  barely swaps in practice (worth revisiting only if that changes).
 
 ## Flash wear
 
@@ -51,7 +55,8 @@ continuously. Mitigations already in the config:
 
 - `packages/recorder.yaml` excludes chatty entities and raises `commit_interval`.
 - `purge_keep_days: 7` while on flash.
-- The recorder DB (`home-assistant_v2.db`, SQLite) moves to the HDD when it arrives.
+- The recorder DB (`home-assistant_v2.db`, SQLite) now lives on the HDD, via
+  the `/var/lib/smart-home-and-hearth` symlink — see above.
 
 **Nothing important may live only on this flash module.** See
 [disaster-recovery.md](disaster-recovery.md).
@@ -76,7 +81,8 @@ application firmware, so reflashing the radio doesn't change it. Already set
 in `podman/otbr.container`.
 
 OTBR also needs the LAN NIC (`enp3s0`) as its backbone/infra interface, and
-IPv6 forwarding enabled on it — see `podman/otbr.container` for the sysctls.
+IPv4/IPv6 forwarding enabled — as host-level sysctls, not container ones, see
+[podman-deploy.md § Host prerequisites](podman-deploy.md#host-prerequisites).
 
 ### Zigbee — deferred, needs its own dongle
 
@@ -109,7 +115,7 @@ eventually point at the wrong radio.
 
 | Item | Purpose | Status |
 |---|---|---|
-| Larger HDD | Container images, recorder DB, restic repo | ☐ not fitted — **gates storage changes** |
+| Larger HDD | Container images, recorder DB, restic repo | ☑ fitted 2026-08-25 — podman store + `/var/lib/smart-home-and-hearth` moved, restic repo still pending (see disaster-recovery.md § Where backups go) |
 | Second Sonoff dongle | Zigbee (deferred — original dongle now runs Thread) | ☐ deferred |
 | Raspberry Pi + MinIO | S3 backup target on the LAN | ☐ phase 1 backup target |
 

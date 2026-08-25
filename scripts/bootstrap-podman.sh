@@ -48,6 +48,17 @@ sudo mkdir -p /var/lib/smart-home-and-hearth/ha-config
 sudo mkdir -p /var/lib/smart-home-and-hearth/otbr
 sudo mkdir -p /var/lib/smart-home-and-hearth/matter-server
 
+# ── OTBR host prerequisites ─────────────────────────────────────────────────
+# otbr.container can't set these itself (podman 5.7.0 rejects per-container
+# Sysctl= under Network=host, and its entrypoint's own NAT44 setup needs
+# netfilter kernel modules present) - see podman/host-config/ and
+# docs/podman-deploy.md § Host prerequisites.
+say "Installing OTBR host prerequisites (sysctls, kernel modules)"
+sudo cp podman/host-config/99-otbr-forwarding.conf /etc/sysctl.d/
+sudo sysctl --system >/dev/null
+sudo cp podman/host-config/otbr-nat-modules.conf /etc/modules-load.d/
+sudo modprobe iptable_nat iptable_mangle iptable_filter ip6table_filter
+
 # ── Quadlets and plain units ─────────────────────────────────────────────────
 say "Installing Quadlet units"
 sudo mkdir -p /etc/containers/systemd

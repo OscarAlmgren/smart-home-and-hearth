@@ -37,6 +37,39 @@ Two stages in one script:
    dataset (`/var/lib/smart-home-and-hearth/otbr`) to an S3-compatible
    target, applies retention, and verifies.
 
+## Incidents
+
+### 2026-08-25 — quadlet crash loop filled the root disk
+
+Root disk usage climbed 65%->74% (on the 9.8 GiB `/` partition) because
+`homeassistant.service`, `matter-server.service`, `otbr.service`, and a
+stale `postgres.service` (leftover from before the SQLite switch, no longer
+in the repo) were left enabled while genuinely broken, and systemd
+crash-looped them for roughly 25 minutes - the restart counter reached 89
+on one unit. Root cause of the *unbounded* part: `StartLimitIntervalSec`/
+`StartLimitBurst` were set in `[Service]` in all three current `.container`
+files, where systemd silently ignores them ("Unknown key ... ignoring").
+They're now in `[Unit]`, where they actually apply (burst raised to 10 to
+tolerate a slow legitimate cold start on this hardware without
+false-triggering).
+
+Two more bugs surfaced once the units were re-enabled, both now fixed - see
+[podman-deploy.md § Host prerequisites](podman-deploy.md#host-prerequisites)
+for detail: `otbr.container`'s `Sysctl=` lines don't work under podman
+5.7.0 with `Network=host`, and OTBR's own entrypoint needs NAT44 kernel
+modules loaded on the host.
+
+Separately, image pulls stage in `/var/tmp` (`image_copy_tmp_dir` in
+`containers.conf`) regardless of where the podman store's `graphroot`
+points - a 500GB second disk (`/mnt/storage`, mounted from an external
+SSHD) was fitted the same day (see
+[hardware.md § The disk is the constraint](hardware.md#the-disk-is-the-constraint)),
+and both the podman store and the live `/var/lib/smart-home-and-hearth`
+data now live there (the latter via a symlink, so the Quadlet units'
+`Volume=` paths didn't need to change) - but `image_copy_tmp_dir` had to be
+set explicitly in `containers.conf` on top of that, since moving
+`graphroot` alone left pull staging still hitting the small disk.
+
 ## What is backed up, in order of criticality
 
 ### 1. `/config/.storage/`
