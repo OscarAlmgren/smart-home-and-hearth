@@ -1,0 +1,28 @@
+---
+references:
+  - "File: /scripts/bootstrap-podman.sh"
+generationTime: 2026-08-25T08:30:31.415Z
+---
+flowchart TD
+    A["Start Function"] --> B{Check Condition}
+    B -->|Yes| C["Process Data"]
+    B -->|No| D["Handle Error"]
+    C --> E[(Save to DB)]
+    E --> F["Return Success"]
+    D --> G["Log Error"]
+
+    S["Start Script"] --> OS{"Is OS Linux?"}
+    OS -->|No| ErrorDie["Exit: 'die(&quot;Run this on the server, not on macOS.&quot;)'"]
+    OS -->|Yes| DC{"Free space on '/' >= 2G?"}
+    DC -->|No| DiskDie["Exit: 'die(&quot;Less than 2G free on /. Free space before continuing&quot;)'"]
+    DC -->|Yes| P{"Is 'podman' installed?"}
+    P -->|No| InstallPodman["Run: 'sudo apt-get update' and 'sudo apt-get install -y podman'"]
+    P -->|Yes| PodmanAlready["Report: 'Podman already installed (podman --version)'"]
+    InstallPodman --> PodmanVersion["Get podman version: 'podman --version'"]
+    PodmanAlready --> PodmanVersion
+    PodmanVersion --> PodmanMajorMinor["Extract 'podman_major_minor'"]
+    PodmanMajorMinor --> CreateDirs["Create runtime data directories: '/var/lib/smart-home-and-hearth/ha-config', '/var/lib/smart-home-and-hearth/otbr', '/var/lib/smart-home-and-hearth/matter-server'"]
+    CreateDirs --> InstallUnits["Install Quadlet units and services: copy 'podman/*.container' to '/etc/containers/systemd' and services to '/etc/systemd/system'"]
+    InstallUnits --> SystemctlReload["Run: 'sudo systemctl daemon-reload'"]
+    SystemctlReload --> EOFOutput["Print remaining manual steps (here-doc / EOF)"]
+    EOFOutput --> End["End Script"]
