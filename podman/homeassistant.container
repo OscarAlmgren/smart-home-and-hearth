@@ -45,14 +45,16 @@ Volume=/var/lib/smart-home-and-hearth/ha-config:/config
 # Home Assistant reads /etc/localtime in addition to TZ.
 Volume=/etc/localtime:/etc/localtime:ro
 
-# Zigbee: deferred (docs/hardware.md — Radios). The original Sonoff dongle
-# has been reflashed for Thread instead and is now owned by otbr.container —
-# see podman/otbr.container. Zigbee needs its own dongle before this can be
-# uncommented. Once one is fitted, in a USB 2.0 port:
+# Zigbee (ZHA): the Sonoff dongle is being re-flashed from OpenThread RCP
+# back to Zigbee coordinator firmware, now that Thread is served off-host by
+# the Google/Nest Wifi Thread Border Router (the on-host otbr.container was
+# decommissioned 2026-08-28). Once the dongle is re-flashed and seated in a
+# USB 2.0 port on an extension cable:
 #   ls -l /dev/serial/by-id/
-# and uncomment, using that path. Never /dev/ttyACM0 — kernel enumeration
-# order changes across reboots and will silently point ZHA at the wrong radio.
-# AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_...-if00-port0:/dev/zigbee
+# then uncomment the line below with that path. Never /dev/ttyACM0 — kernel
+# enumeration order changes across reboots and will silently point ZHA at
+# the wrong radio. This dongle's by-id path ends -if00 (no -port0 suffix).
+# AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00:/dev/zigbee
 
 # Privileged + host network together are what --memory needs PodmanArgs for;
 # neither has a first-class Quadlet key.

@@ -1,18 +1,19 @@
 # python-matter-server — the project backing Home Assistant's Matter
-# integration. Needed as a standalone container for the same reason OTBR is:
-# HA's own Matter Server add-on only exists under HAOS's supervisor.
+# integration. Needed as a standalone container because HA's own Matter
+# Server add-on only exists under HAOS's supervisor.
 #
 # Talks to HA over websocket (ws://127.0.0.1:5580/ws — add the Matter
-# integration in the HA UI once this is up) and to Thread devices via
-# otbr.container's border agent, discovered over mDNS. No host Bluetooth is
-# needed here: Matter-over-Thread commissioning happens from a phone's own
-# BLE, which then hands the device off onto the Thread mesh OTBR is routing.
-# This box has no Bluetooth adapter anyway (docs/hardware.md).
+# integration in the HA UI once this is up) and reaches Thread devices via
+# an external Thread Border Router (the Google/Nest Wifi TBR), discovered
+# over mDNS. No host Bluetooth is needed here: Matter-over-Thread
+# commissioning happens from a phone's own BLE, which then hands the device
+# off onto the Thread mesh the Nest TBR routes. This box has no Bluetooth
+# adapter anyway (docs/hardware.md).
 #
 # Install: copy into /etc/containers/systemd/. See docs/podman-deploy.md.
 [Unit]
 Description=Matter Server (Matter/Thread device commissioning for Home Assistant)
-After=network-online.target otbr.service
+After=network-online.target
 Wants=network-online.target
 
 # StartLimitIntervalSec/StartLimitBurst only take effect in [Unit] — systemd

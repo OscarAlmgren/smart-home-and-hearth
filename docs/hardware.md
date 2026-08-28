@@ -25,9 +25,10 @@ else that isn't inherently OS state lives on the 500 GB Seagate SSHD, fitted
 
 | On `/mnt/storage` | How |
 |---|---|
-| Podman image/container store | `graphroot` in `/etc/containers/storage.conf` |
+| Rootful Podman image/container store (HA, matter-server) | `graphroot` in `/etc/containers/storage.conf` → `/mnt/storage/containers/storage-root` |
+| Rootless Podman store (the Bedrock server, user `oscaralmgren`) | `rootless_storage_path` in `~/.config/containers/storage.conf` → `/mnt/storage/containers/rootless` (moved off the boot disk 2026-08-28 — rootless podman ignores `graphroot`) |
 | Image-pull staging | `image_copy_tmp_dir` in `/etc/containers/containers.conf` — `graphroot` alone does **not** cover this; pulls stage in `/var/tmp` by default regardless of `graphroot` |
-| `/var/lib/smart-home-and-hearth` (config, recorder DB, Thread dataset, Matter data) | root is a symlink to `/mnt/storage/smart-home-and-hearth` — the Quadlet units' `Volume=` paths are unchanged |
+| `/var/lib/smart-home-and-hearth` (config, recorder DB, Matter data) | root is a symlink to `/mnt/storage/smart-home-and-hearth` — the Quadlet units' `Volume=` paths are unchanged |
 
 MicroK8s (and the PVC/containerd-data-root budget this section used to
 track) is decommissioned - see
@@ -63,34 +64,29 @@ continuously. Mitigations already in the config:
 
 ## Radios
 
-### Thread/Matter — Sonoff dongle, reflashed with OpenThread RCP (active)
+### Thread/Matter — off-host, Google/Nest Wifi Thread Border Router
 
-The Sonoff dongle originally bought for Zigbee has been reflashed with
-**OpenThread RCP** firmware and is now the Thread radio, run through a
-containerized OpenThread Border Router (`podman/otbr.container`) plus
-`python-matter-server` (`podman/matter-server.container`) — Home Assistant's
-own OTBR/Matter Server add-ons only exist under HAOS's supervisor. This is
-prioritized ahead of Zigbee; see CLAUDE.md § Deferred work.
+Thread is **not** run on henrybook. An on-host containerized OpenThread
+Border Router (`podman/otbr.container`, using the Sonoff dongle reflashed to
+OpenThread RCP) was tried between 2026-08-25 and 2026-08-28, then
+decommissioned: the household already has a **Google/Nest Wifi Thread Border
+Router**, Home Assistant's `thread` integration discovers it over mDNS, and
+both commissioned Matter-over-Thread devices were already homed on the Nest
+mesh (`NEST-PAN-0057`), not on the OTBR network. Running a second border
+router on a 2-core / 6 GiB box for no devices was pure overhead — plus OTBR's
+`latest` image logs at `-d7` and buried the journal.
 
-**Same placement rule as below applies** — USB 2.0 port, on an extension
-cable, referenced by `/dev/serial/by-id/`. Confirmed on henrybook: the by-id
-string is unchanged from the Zigbee-firmware days
-(`usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00`) —
-it's derived from the dongle's CP2102N USB-UART bridge chip, not the EFR32
-application firmware, so reflashing the radio doesn't change it. Already set
-in `podman/otbr.container`.
+`podman/matter-server.container` (`python-matter-server`) stays — it backs
+HA's Matter integration, which only exists as a HAOS supervisor add-on
+otherwise. It reaches Thread devices via the Nest border router over mDNS; it
+needs no radio, no host sysctls, and no kernel modules.
 
-OTBR also needs the LAN NIC (`enp3s0`) as its backbone/infra interface, and
-IPv4/IPv6 forwarding enabled — as host-level sysctls, not container ones, see
-[podman-deploy.md § Host prerequisites](podman-deploy.md#host-prerequisites).
+### Zigbee — Sonoff dongle, being re-flashed back to Zigbee
 
-### Zigbee — deferred, needs its own dongle
-
-Concurrent Zigbee+Thread on one radio requires Silicon Labs multiprotocol RCP
-firmware, which Home Assistant has deprecated and stopped recommending after
-sustained reports of degraded Zigbee reliability — so Zigbee is deferred until
-a **separate** Sonoff Zigbee 3.0 USB Dongle Plus is available for it, rather
-than sharing the one now dedicated to Thread.
+With Thread now handled off-host, the Sonoff Zigbee 3.0 USB Dongle Plus V2
+(originally bought for Zigbee, temporarily flashed to OpenThread RCP for the
+OTBR experiment) is being **re-flashed back to Zigbee coordinator firmware**
+for ZHA. No second dongle is needed anymore.
 
 **Plug it into a USB 2.0 port, on an extension cable.**
 
@@ -104,7 +100,8 @@ Reference it by stable path, never `/dev/ttyACM0`:
 
 ```bash
 ls -l /dev/serial/by-id/
-# usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_<serial>-if00-port0
+# usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00
+# (this dongle's path ends -if00 — no -port0 suffix)
 ```
 
 Put that path in `podman/homeassistant.container`'s commented `AddDevice=`
@@ -115,8 +112,8 @@ eventually point at the wrong radio.
 
 | Item | Purpose | Status |
 |---|---|---|
-| Larger HDD | Container images, recorder DB, restic repo | ☑ fitted 2026-08-25 — podman store + `/var/lib/smart-home-and-hearth` moved, restic repo still pending (see disaster-recovery.md § Where backups go) |
-| Second Sonoff dongle | Zigbee (deferred — original dongle now runs Thread) | ☐ deferred |
+| Larger HDD | Container images, recorder DB, restic repo | ☑ fitted 2026-08-25 — rootful + rootless podman stores and `/var/lib/smart-home-and-hearth` moved onto it, restic repo still pending (see disaster-recovery.md § Where backups go) |
+| Zigbee via ZHA | Sonoff dongle (re-flashing from OpenThread RCP back to Zigbee firmware) | ☐ pending re-flash + `AddDevice=` in `podman/homeassistant.container` |
 | Raspberry Pi + MinIO | S3 backup target on the LAN | ☐ phase 1 backup target |
 
 MinIO on the LAN is **not offsite** — a fire, theft or power event takes both

@@ -33,8 +33,7 @@ Two stages in one script:
    filesystem copy of `home-assistant_v2.db` — copying a WAL-mode SQLite file
    out from under a running Home Assistant produces a torn, unrestorable
    snapshot, the same reason `pg_dump` existed when the recorder was Postgres.
-2. **restic** ships the staged snapshot plus `/config` and the OTBR Thread
-   dataset (`/var/lib/smart-home-and-hearth/otbr`) to an S3-compatible
+2. **restic** ships the staged snapshot plus `/config` to an S3-compatible
    target, applies retention, and verifies.
 
 ## Incidents
@@ -53,11 +52,14 @@ They're now in `[Unit]`, where they actually apply (burst raised to 10 to
 tolerate a slow legitimate cold start on this hardware without
 false-triggering).
 
-Two more bugs surfaced once the units were re-enabled, both now fixed - see
-[podman-deploy.md § Host prerequisites](podman-deploy.md#host-prerequisites)
-for detail: `otbr.container`'s `Sysctl=` lines don't work under podman
-5.7.0 with `Network=host`, and OTBR's own entrypoint needs NAT44 kernel
-modules loaded on the host.
+Two more bugs surfaced once the units were re-enabled, both worked around at
+the time: `otbr.container`'s `Sysctl=` lines don't work under podman 5.7.0
+with `Network=host` (moved to host-level `/etc/sysctl.d/`), and OTBR's own
+entrypoint needs NAT44 kernel modules loaded on the host
+(`/etc/modules-load.d/`). Both were moot after **2026-08-28, when the on-host
+OTBR was decommissioned** — Thread moved to the Google/Nest Wifi border
+router (see [hardware.md § Radios](hardware.md#radios)) — and those host
+files were removed.
 
 Separately, image pulls stage in `/var/tmp` (`image_copy_tmp_dir` in
 `containers.conf`) regardless of where the podman store's `graphroot`
@@ -84,24 +86,19 @@ Assistant.
 Full exclude list and the reasoning:
 [`podman/restic-excludes.txt`](../podman/restic-excludes.txt).
 
-### 2. The OTBR Thread dataset (`/var/lib/smart-home-and-hearth/otbr`)
+Once a Zigbee dongle is added (see docs/hardware.md § Radios),
+`/config/zigbee.db` joins this tier — losing it means re-pairing every Zigbee
+device by hand. It is not in the general excludes, so it rides along with the
+rest of `/config`. (Thread/Matter devices are homed on the Nest Wifi border
+router, off this box — there is no on-host Thread dataset to back up.)
 
-Holds the Thread network's operational dataset — keys, PAN ID, channel — and
-the pairing state of every Thread/Matter device on it.
-
-**Without it you re-form the Thread mesh and re-join every device by hand**,
-the same failure mode `zigbee.db` is notorious for on a Zigbee network. Once
-a Zigbee dongle is added (see docs/hardware.md § Radios), `/config/zigbee.db`
-becomes equally critical and is already excluded from the general excludes so
-it rides along with the rest of `/config`.
-
-### 3. The recorder database
+### 2. The recorder database
 
 SQLite, snapshotted via `VACUUM INTO` (see above) — a single file, no
 version-specific restore tooling needed. This is your history and long-term
 statistics.
 
-Least critical of the three: losing it costs you graphs, not a working house.
+Least critical of the two: losing it costs you graphs, not a working house.
 
 ## Retention
 
@@ -177,8 +174,7 @@ restoring underneath a running recorder will not end well.
    above). Nothing else can start until these exist.
 4. `scripts/restore.sh --target prod --snapshot latest` — restores `/config`
    (including the recorder DB, installed from the staged `VACUUM INTO`
-   snapshot) and the OTBR Thread dataset, then starts `otbr.service` and
-   `homeassistant.service` itself.
+   snapshot), then starts `homeassistant.service` itself.
 
 You need exactly three things that are not in git: **the restic password**,
 **`config/secrets.yaml` / `.env.prod.secret`**, and **network access to the
@@ -209,11 +205,10 @@ Check, in the restored instance:
       broken)
 - [ ] Dashboards render as you built them
 - [ ] History shows data from before the snapshot (proves the recorder DB restored)
-- [ ] Once Zigbee/Thread devices exist: their registries survive with no
-      radio attached (proves `zigbee.db` / the OTBR Thread dataset restored —
-      the drill above only exercises `/config`; a full Thread-dataset restore
-      test means running `--target prod` for real, or extending the drill to
-      also restore `/otbr` and start a scratch `otbr` container)
+- [ ] Once a Zigbee dongle is added: device registries survive with no radio
+      attached (proves `zigbee.db` restored — it rides along in `/config`).
+      Thread/Matter devices live on the Nest Wifi border router, not this
+      box, so there is nothing on-host to restore for them.
 
 Then tear it down (the drill script prints these same commands at the end):
 

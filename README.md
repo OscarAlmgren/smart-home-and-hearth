@@ -1,9 +1,10 @@
 # smart-home-and-hearth
 
 Home Assistant running on **Podman Quadlets** on `henrybook` (bare metal —
-MicroK8s was decommissioned 2026-08-06). Recorder DB is SQLite; Thread/Matter
-(containerized OTBR + matter-server) is the active IoT radio priority, ahead
-of Zigbee.
+MicroK8s was decommissioned 2026-08-06). Recorder DB is SQLite. Matter runs
+on-host via `matter-server.container`; Thread is served off-host by a
+Google/Nest Wifi Thread Border Router (an on-host OTBR was tried and
+decommissioned 2026-08-28). Zigbee/ZHA is pending a dongle re-flash.
 
 > **Live deployment:** **[docs/podman-deploy.md](docs/podman-deploy.md)**. Start there.
 > **[docs/MIGRATION.md](docs/MIGRATION.md)** is kept as the historical record of the
@@ -22,7 +23,7 @@ docs/
   lcm.md                # branch model and promotion (CI-only now, see below)
   microk8s-bootstrap.md # historical: one-time MicroK8s server build
 podman/                 # Quadlet + systemd units — the live deployment
-  homeassistant.container otbr.container matter-server.container
+  homeassistant.container matter-server.container
   ha-sync-config.service backup.service backup.timer
 k8s/                     # reference only — still CI-validated, not live
   base/ overlays/{dev,test,prod}/
@@ -64,7 +65,7 @@ change is manual for now (see docs/podman-deploy.md § Known gaps):
 
 ```bash
 git pull
-sudo systemctl restart homeassistant.service   # or otbr.service / matter-server.service
+sudo systemctl restart homeassistant.service   # or matter-server.service
 ```
 
 Home Assistant is at `http://<server-ip>:8123` on the LAN. Remote access is
@@ -92,10 +93,9 @@ This is **not** how the server runs anything. Do not deploy from it.
   `/var/lib/smart-home-and-hearth/` on a 16 GB flash module with ~12 GiB usable.
   Ask before changing any retention setting or moving anything to the HDD — see
   [CLAUDE.md](CLAUDE.md).
-- **The Sonoff dongle originally bought for Zigbee now runs Thread** (reflashed
-  with OpenThread RCP firmware) — Zigbee is deferred until a separate dongle is
-  available. Same USB-2.0-port-on-an-extension-cable rule applies to whichever
-  dongle ends up doing Zigbee: USB 3.0 controllers emit 2.4 GHz noise that
-  degrades it badly.
+- **The Sonoff dongle is being re-flashed from OpenThread RCP back to Zigbee**
+  now that Thread runs on the Nest Wifi border router, not this box. USB 2.0
+  port on an extension cable when it goes in: USB 3.0 controllers emit 2.4 GHz
+  noise that degrades Zigbee badly.
 - **Disk exhaustion is the most likely failure mode.** The root-filesystem alert
   is the most valuable thing in the monitoring stack.

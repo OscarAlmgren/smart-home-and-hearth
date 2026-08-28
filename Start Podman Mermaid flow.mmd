@@ -21,7 +21,7 @@ flowchart TD
     InstallPodman --> PodmanVersion["Get podman version: 'podman --version'"]
     PodmanAlready --> PodmanVersion
     PodmanVersion --> PodmanMajorMinor["Extract 'podman_major_minor'"]
-    PodmanMajorMinor --> CreateDirs["Create runtime data directories: '/var/lib/smart-home-and-hearth/ha-config', '/var/lib/smart-home-and-hearth/otbr', '/var/lib/smart-home-and-hearth/matter-server'"]
+    PodmanMajorMinor --> CreateDirs["Create runtime data directories: '/var/lib/smart-home-and-hearth/ha-config', '/var/lib/smart-home-and-hearth/matter-server'"]
     CreateDirs --> InstallUnits["Install Quadlet units and services: copy 'podman/*.container' to '/etc/containers/systemd' and services to '/etc/systemd/system'"]
     InstallUnits --> SystemctlReload["Run: 'sudo systemctl daemon-reload'"]
     SystemctlReload --> EOFOutput["Print remaining manual steps (here-doc / EOF)"]

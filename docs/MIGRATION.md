@@ -59,6 +59,11 @@ actually shipped):
   dongle was reflashed to OpenThread RCP firmware instead of buying a second
   one for Thread as originally planned; Zigbee now waits on a dongle of its
   own. See docs/hardware.md § Radios.
+- **On-host OTBR decommissioned 2026-08-28.** The containerized OpenThread
+  Border Router ran only 2026-08-25 → 2026-08-28. Thread now runs on the
+  household's Google/Nest Wifi Thread Border Router, discovered by Home
+  Assistant over mDNS; the Sonoff dongle is being re-flashed back to Zigbee.
+  See docs/hardware.md § Radios.
 
 ---
 

@@ -8,17 +8,18 @@ is kept as the historical record of the MicroK8s build-out (`k8s/` and
 
 ## Check in with Oscar before changing storage
 
-**Storage sizing is gated on hardware.** Runtime state lives under
-`/var/lib/smart-home-and-hearth/` on a 16 GB SATA flash module with ~12 GiB
-usable. A larger HDD is expected but **not yet fitted**.
+The 16 GB SATA flash module (~9.8 GiB usable `/`) holds only the OS + Podman
+packages. A 500 GB SSHD was fitted 2026-08-25 at `/mnt/storage`; as of
+2026-08-28 both the rootful and rootless Podman stores and
+`/var/lib/smart-home-and-hearth` (via symlink) live on it — see
+docs/hardware.md § The disk is the constraint.
 
-Before changing any of the following, **ask Oscar whether the HDD has arrived
-and been mounted**. Do not assume, and do not infer it from the repo:
+Still **ask Oscar first** before changing any of the following (they have
+cost/retention or data-safety implications beyond just free space):
 
 - `purge_keep_days` or any recorder retention setting
 - restic retention policy or backup target
-- moving Podman's storage root, or any `/var/lib/smart-home-and-hearth/*` bind
-  mount, onto the HDD
+- relocating anything else onto `/mnt/storage`, or repartitioning it
 
 ## Non-obvious constraints
 
@@ -27,14 +28,13 @@ slow to diagnose.
 
 - **Serial devices are referenced by `/dev/serial/by-id/`, never `/dev/ttyACM0`.**
   Kernel enumeration order changes across reboots and will silently point a
-  radio container at the wrong device. Applies to both `podman/otbr.container`
-  (Thread, active) and the commented Zigbee line in
-  `podman/homeassistant.container` (deferred).
-- **Radio device paths are placeholders (`REPLACE_ME`) until filled in on the
-  server.** `podman/otbr.container`'s `AddDevice=` and
-  `podman/homeassistant.container`'s commented Zigbee `AddDevice=` both need a
-  real `ls -l /dev/serial/by-id/` path before their unit can start — this
-  can't be known from the repo, it depends on what's plugged in.
+  radio container at the wrong device. Applies to the commented Zigbee
+  `AddDevice=` line in `podman/homeassistant.container`.
+- **The Zigbee device path is a placeholder until filled in on the server.**
+  `podman/homeassistant.container`'s commented Zigbee `AddDevice=` needs a
+  real `ls -l /dev/serial/by-id/` path before it can be uncommented — this
+  can't be known from the repo, it depends on what's plugged in. (Thread is
+  no longer on this box — see § Current: Matter/Thread.)
 - **No CPU limit on the Home Assistant container.** The node has 2 slow cores;
   CFS throttling makes the UI unusable. Memory limits only.
 - **`config/secrets.yaml` and `.env.prod.secret` are plain gitignored files,
@@ -66,7 +66,7 @@ Promotion is by PR: `dev` → `test` → `main`. Never commit directly to `main`
 Live deployment (Podman, on henrybook — see docs/podman-deploy.md § Verification):
 
 ```bash
-systemctl status homeassistant.service ha-sync-config.service otbr.service matter-server.service
+systemctl status homeassistant.service ha-sync-config.service matter-server.service
 curl -sf http://localhost:8123/ >/dev/null && echo ok
 ```
 
@@ -81,9 +81,10 @@ kubectl kustomize k8s/overlays/prod          # must build clean
 
 Do not add these without being asked — they are scoped to later phases:
 
-- **Zigbee.** The original Sonoff dongle was reflashed for Thread instead
-  (see below) — Zigbee is deferred until a separate dongle is available. See
-  docs/hardware.md § Radios.
+- **Zigbee.** The Sonoff dongle is being re-flashed from OpenThread RCP back
+  to Zigbee coordinator firmware (Thread moved off-host — see § Current).
+  Not wired up until the re-flash is done and the `AddDevice=` line in
+  `podman/homeassistant.container` is uncommented. See docs/hardware.md § Radios.
 - **Phase 2 remainder:** OCPP EV charger integration, derived HA image for
   HACS custom components.
 - **Phase 3:** domain, DNS, public IPv6 access, Ingress, TLS. Phase 1 is
@@ -91,7 +92,9 @@ Do not add these without being asked — they are scoped to later phases:
 
 ## Current: Matter/Thread
 
-Containerized OTBR (`podman/otbr.container`) + `python-matter-server`
-(`podman/matter-server.container`), replacing the HAOS-only add-ons — this is
-no longer deferred, it's the active IoT radio priority ahead of Zigbee. See
-docs/hardware.md § Radios and docs/podman-deploy.md.
+`python-matter-server` (`podman/matter-server.container`) backs HA's Matter
+integration (HAOS-only add-on otherwise). **Thread is not run on this box** —
+an on-host OTBR was tried 2026-08-25 → 2026-08-28, then decommissioned; a
+Google/Nest Wifi Thread Border Router serves Thread and HA discovers it over
+mDNS. Do not re-add `podman/otbr.container` or any host IP-forwarding /
+NAT44-module setup. See docs/hardware.md § Radios and docs/podman-deploy.md.

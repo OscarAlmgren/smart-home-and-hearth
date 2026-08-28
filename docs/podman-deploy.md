@@ -1,8 +1,8 @@
 # Podman deployment (replaces MicroK8s)
 
-**Status: Home Assistant (SQLite recorder) + OTBR/Matter + backup/restore.**
-Monitoring (Alloy) and the git-pull deploy loop that replaces Argo CD are not
-ported yet. `k8s/` and `argocd/` are left in place for reference until the
+**Status: Home Assistant (SQLite recorder) + Matter (Thread served off-host by
+the Google/Nest Wifi Thread Border Router) + backup/restore.** Monitoring
+(Alloy) and the git-pull deploy loop that replaces Argo CD are not ported yet. `k8s/` and `argocd/` are left in place for reference until the
 cutover is confirmed working; they are not deleted by this doc.
 
 ## Why
@@ -34,33 +34,12 @@ shape, not new territory for this hardware.
 | Argo CD GitOps sync | Not yet ported — see Known gaps below |
 
 Also new since the MicroK8s version and not a straight port of anything:
-`podman/otbr.container` + `podman/matter-server.container`, the containerized
-OpenThread Border Router and Matter Server that replace HAOS's supervisor
-add-ons — see docs/hardware.md § Radios.
-
-## Host prerequisites
-
-`scripts/bootstrap-podman.sh` installs these automatically from
-`podman/host-config/`, but they're worth knowing about since they don't show
-up anywhere in the Quadlet unit files themselves - it's tempting to put them
-there and they used to be, until reality disagreed:
-
-- **OTBR forwarding sysctls** (`net.ipv4.conf.all.forwarding`,
-  `net.ipv6.conf.all.forwarding`). `otbr.container` used to set these itself
-  via `Sysctl=`, but podman 5.7.0 rejects per-container sysctls under
-  `Network=host` ("can't be set since Network Namespace set to host: invalid
-  argument") - with host networking the container *is* the host netns, so
-  they have to be host-level (`/etc/sysctl.d/99-otbr-forwarding.conf`)
-  instead.
-- **NAT44 kernel modules** (`iptable_nat`, `iptable_mangle`,
-  `iptable_filter`, `ip6table_filter`). OTBR's own container entrypoint runs
-  a NAT44 setup step via legacy `iptables` and `die`s outright if these
-  aren't loaded ("Table does not exist (do you need to insmod?)").
-  `/etc/modules-load.d/otbr-nat-modules.conf` loads them at boot.
-
-Both surfaced the same way: `otbr.service` crash-looping on a fresh start.
-See the Aug 25 incident notes in [disaster-recovery.md](disaster-recovery.md)
-for how much damage a crash loop can do before these were understood.
+`podman/matter-server.container`, the containerized Matter Server that
+replaces HAOS's supervisor add-on. Thread itself is no longer run on this
+box — an on-host OpenThread Border Router (`otbr.container`) was tried and
+then decommissioned 2026-08-28; a Google/Nest Wifi Thread Border Router now
+serves Thread, and Home Assistant discovers it over mDNS through the Matter
+integration. See docs/hardware.md § Radios.
 
 ## Secrets
 
@@ -81,13 +60,13 @@ cd /home/oscaralmgren/smart-home-and-hearth
 ./scripts/bootstrap-podman.sh
 ```
 
-Follow the printed next steps (secrets, OTBR/Zigbee device paths, enabling
-the units). Full sequence is in `scripts/bootstrap-podman.sh`'s own output.
+Follow the printed next steps (secrets, Zigbee device path, enabling the
+units). Full sequence is in `scripts/bootstrap-podman.sh`'s own output.
 
 ## Verification
 
 ```bash
-systemctl status homeassistant.service ha-sync-config.service otbr.service matter-server.service
+systemctl status homeassistant.service ha-sync-config.service matter-server.service
 journalctl -u homeassistant.service -f          # watch first boot
 curl -sf http://localhost:8123/ >/dev/null && echo ok
 ls -lh /var/lib/smart-home-and-hearth/ha-config/home-assistant_v2.db   # recorder DB exists
@@ -95,7 +74,7 @@ ls -lh /var/lib/smart-home-and-hearth/ha-config/home-assistant_v2.db   # recorde
 
 - [ ] Home Assistant reachable at `http://<server-ip>:8123`; onboarding completes
 - [ ] Recorder is on SQLite — `home-assistant_v2.db` exists in `/var/lib/smart-home-and-hearth/ha-config`, no `postgres` container running
-- [ ] `journalctl -u otbr.service -f` shows a healthy Thread network; add the Matter integration in HA pointing at `ws://127.0.0.1:5580/ws`
+- [ ] Add the Matter integration in HA pointing at `ws://127.0.0.1:5580/ws`; the Thread integration discovers the Nest Wifi border router over mDNS and shows its dataset as preferred
 - [ ] `systemctl reboot` — all units come back on their own (`WantedBy=multi-user.target`)
 - [ ] Edit `config/configuration.yaml` in git, `git pull` on the server, `systemctl restart homeassistant.service` — change takes effect (manual for now; see Known gaps)
 - [ ] **Optional, not required for a first deploy** — once real `RESTIC_*`/`AWS_*` values are in `.env.prod.secret` and `backup.timer` is enabled: `sudo systemctl start backup.service` (runs it once, on demand) completes without error — `journalctl -u backup.service`
