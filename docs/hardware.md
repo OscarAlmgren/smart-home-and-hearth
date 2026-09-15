@@ -12,7 +12,7 @@ The server is `henrybook`, an **HP t610 WW thin client** (B8C95AA#ABD). Full
 | Storage | **16 GB SATA flash**, largest partition ~12 GiB | The binding constraint. See below. |
 | SATA | SB7x0/SB8x0/SB9x0 controller in **IDE mode** | No AHCI, no NCQ. The incoming HDD will be slow — fine for backups and the DB, keep hot paths on flash. |
 | Network | 1× Broadcom BCM57781 gigabit (`enp3s0`) | No WiFi. |
-| Bluetooth | **none** | Dropped from scope. Would need a USB adapter plus host D-Bus in the pod. |
+| Bluetooth | Realtek RTL8761BU USB dongle (`0bda:a760`, BT 5.x; sold as "Bluetooth 6.0"), added 2026-09-15 | Host runs `bluez` + `bluetooth.service`; HA reaches it via `/run/dbus` mounted into the container. USB autosuspend must stay off (`/etc/udev/rules.d/50-rtl8761bu-no-autosuspend.rules`) or it times out and resets on the OHCI controller. |
 | USB | OHCI + EHCI (USB 2.0), TUSB73x0 xHCI (USB 3.0) | Enough ports. Placement matters — see below. |
 
 ## The disk is the constraint
@@ -64,37 +64,55 @@ continuously. Mitigations already in the config:
 
 ## Radios
 
-### Thread/Matter — off-host, Google/Nest Wifi Thread Border Router
+### Thread/Matter — Home Assistant OTBR, Sonoff dongle as the Thread radio
 
-Thread is **not** run on henrybook. An on-host containerized OpenThread
-Border Router (`podman/otbr.container`, using the Sonoff dongle reflashed to
-OpenThread RCP) was tried between 2026-08-25 and 2026-08-28, then
-decommissioned: the household already has a **Google/Nest Wifi Thread Border
-Router**, Home Assistant's `thread` integration discovers it over mDNS, and
-both commissioned Matter-over-Thread devices were already homed on the Nest
-mesh (`NEST-PAN-0057`), not on the OTBR network. Running a second border
-router on a 2-core / 6 GiB box for no devices was pure overhead — plus OTBR's
-`latest` image logs at `-d7` and buried the journal.
+**Target:** Thread is owned by an **on-host OpenThread Border Router** that
+Home Assistant manages. The Sonoff Zigbee 3.0 USB Dongle Plus V2 stays on
+**OpenThread RCP firmware** and is that border router's radio. HA runs as a
+container here, not HAOS, so there is no OTBR add-on. Instead an OTBR
+container (`podman/otbr.container`, to be re-added) drives the dongle, and HA
+connects to it through its **Open Thread Border Router** integration. The
+HA-owned Thread network becomes the preferred dataset, and Thread devices are
+re-commissioned onto it.
 
-`podman/matter-server.container` (`python-matter-server`) stays — it backs
-HA's Matter integration, which only exists as a HAOS supervisor add-on
-otherwise. It reaches Thread devices via the Nest border router over mDNS; it
-needs no radio, no host sysctls, and no kernel modules.
+**Status (2026-09-15):** planned, not deployed. Until then Thread is still
+served by the household's 2019 Google Nest Wifi units, which HA's `thread`
+integration discovers over mDNS.
 
-### Zigbee — Sonoff dongle, being re-flashed back to Zigbee
+**Why the plan is back on-host.** A first OTBR ran 2026-08-25 → 2026-08-28 and
+was removed in favour of the Nest Wifi border routers. That turned out to be
+the wrong trade: each 2019 Nest Wifi unit (H2D router / H2E point) runs its
+own separate Thread network with no way to merge them, and mains-powered
+Thread routers (GRILLPLATS plug, KAJPLATS bulb) kept dropping out of HA. The
+Nest units are also being replaced. An HA-owned border router gives one
+network that HA controls and a local Thread path.
 
-With Thread now handled off-host, the Sonoff Zigbee 3.0 USB Dongle Plus V2
-(originally bought for Zigbee, temporarily flashed to OpenThread RCP for the
-OTBR experiment) is being **re-flashed back to Zigbee coordinator firmware**
-for ZHA. No second dongle is needed anymore.
+**Lessons to carry into the new `otbr.container`** (from the first attempt):
 
-**Plug it into a USB 2.0 port, on an extension cable.**
+- Pin an image version. The old `latest` image logged at `-d7` and buried the
+  journal.
+- `Sysctl=` doesn't work under podman 5.7.0 with `Network=host`. Set IPv6
+  forwarding in `/etc/sysctl.d/`, and load the `iptable_nat`,
+  `iptable_mangle`, `iptable_filter` and `ip6table_filter` modules via
+  `/etc/modules-load.d/`.
+- Add `ConditionPathExists=` on the dongle's by-id path so a missing dongle
+  skips the unit instead of crash-looping (see the 2026-08-25 incident in
+  disaster-recovery.md).
+- The Thread network dataset is state worth backing up. The first attempt's
+  dataset is archived at `/mnt/storage/otbr-thread-dataset-20260828.tgz`.
 
-USB 3.0 controllers and their cabling emit broadband noise around 2.4 GHz, which
-is exactly where Zigbee lives. A dongle seated directly in a USB 3.0 port is the
-single most common cause of "Zigbee devices randomly drop off" reports. The
-extension cable also gets the antenna away from the chassis and the Ethernet
-port.
+`podman/matter-server.container` (`python-matter-server`) backs HA's Matter
+integration, which only exists as a HAOS supervisor add-on otherwise. It
+reaches Thread devices through whichever border router is advertised over
+mDNS and needs no radio of its own.
+
+**Dongle placement.** Plug it into a USB 2.0 port, on an extension cable.
+USB 3.0 controllers and their cabling emit broadband noise around 2.4 GHz,
+which is exactly where Thread (channel 17 ≈ 2435 MHz) lives. The extension
+also gets the antenna away from the chassis, the Ethernet port and the
+Bluetooth dongle. As of 2026-09-15 it is on USB port 2-3 (OHCI), on a 1.5 m
+extension, taped high up on the outside of an AC unit. That spot is temporary
+until a better one is found.
 
 Reference it by stable path, never `/dev/ttyACM0`:
 
@@ -104,16 +122,21 @@ ls -l /dev/serial/by-id/
 # (this dongle's path ends -if00 — no -port0 suffix)
 ```
 
-Put that path in `podman/homeassistant.container`'s commented `AddDevice=`
-line. Kernel enumeration order changes across reboots, so `/dev/ttyACM0` will
-eventually point at the wrong radio.
+The USB product name says "Zigbee" whatever firmware is flashed. Kernel
+enumeration order changes across reboots, so `/dev/ttyACM0` will eventually
+point at the wrong radio.
+
+### Zigbee — no radio
+
+Zigbee/ZHA is not planned. The only 802.15.4 dongle is the Thread radio above,
+and Zigbee would need a second dongle of its own.
 
 ## Planned additions
 
 | Item | Purpose | Status |
 |---|---|---|
 | Larger HDD | Container images, recorder DB, restic repo | ☑ fitted 2026-08-25 — rootful + rootless podman stores and `/var/lib/smart-home-and-hearth` moved onto it, restic repo still pending (see disaster-recovery.md § Where backups go) |
-| Zigbee via ZHA | Sonoff dongle (re-flashing from OpenThread RCP back to Zigbee firmware) | ☐ pending re-flash + `AddDevice=` in `podman/homeassistant.container` |
+| Home Assistant OTBR | On-host Thread Border Router: `podman/otbr.container` + HA's Open Thread Border Router integration, Sonoff dongle (OpenThread RCP) as the radio | ☐ planned — dongle attached 2026-09-15, container not yet re-added |
 | Raspberry Pi + MinIO | S3 backup target on the LAN | ☐ phase 1 backup target |
 
 MinIO on the LAN is **not offsite** — a fire, theft or power event takes both

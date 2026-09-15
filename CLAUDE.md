@@ -28,13 +28,13 @@ slow to diagnose.
 
 - **Serial devices are referenced by `/dev/serial/by-id/`, never `/dev/ttyACM0`.**
   Kernel enumeration order changes across reboots and will silently point a
-  radio container at the wrong device. Applies to the commented Zigbee
-  `AddDevice=` line in `podman/homeassistant.container`.
-- **The Zigbee device path is a placeholder until filled in on the server.**
-  `podman/homeassistant.container`'s commented Zigbee `AddDevice=` needs a
-  real `ls -l /dev/serial/by-id/` path before it can be uncommented — this
-  can't be known from the repo, it depends on what's plugged in. (Thread is
-  no longer on this box — see § Current: Matter/Thread.)
+  radio container at the wrong device. Applies to the Sonoff Thread dongle
+  (`usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00`)
+  when it is passed to `podman/otbr.container`.
+- **The Sonoff dongle is the Thread radio, not a Zigbee coordinator.** It runs
+  OpenThread RCP firmware for the planned Home Assistant OTBR, despite
+  "Zigbee" in its USB name. Don't re-flash it to Zigbee and don't pass it to
+  the Home Assistant container. See § Current: Matter/Thread.
 - **No CPU limit on the Home Assistant container.** The node has 2 slow cores;
   CFS throttling makes the UI unusable. Memory limits only.
 - **`config/secrets.yaml` and `.env.prod.secret` are plain gitignored files,
@@ -81,10 +81,8 @@ kubectl kustomize k8s/overlays/prod          # must build clean
 
 Do not add these without being asked — they are scoped to later phases:
 
-- **Zigbee.** The Sonoff dongle is being re-flashed from OpenThread RCP back
-  to Zigbee coordinator firmware (Thread moved off-host — see § Current).
-  Not wired up until the re-flash is done and the `AddDevice=` line in
-  `podman/homeassistant.container` is uncommented. See docs/hardware.md § Radios.
+- **Zigbee.** No radio. The only 802.15.4 dongle is the Thread radio, and
+  Zigbee would need a second one. See docs/hardware.md § Radios.
 - **Phase 2 remainder:** OCPP EV charger integration, derived HA image for
   HACS custom components.
 - **Phase 3:** domain, DNS, public IPv6 access, Ingress, TLS. Phase 1 is
@@ -93,8 +91,17 @@ Do not add these without being asked — they are scoped to later phases:
 ## Current: Matter/Thread
 
 `python-matter-server` (`podman/matter-server.container`) backs HA's Matter
-integration (HAOS-only add-on otherwise). **Thread is not run on this box** —
-an on-host OTBR was tried 2026-08-25 → 2026-08-28, then decommissioned; a
-Google/Nest Wifi Thread Border Router serves Thread and HA discovers it over
-mDNS. Do not re-add `podman/otbr.container` or any host IP-forwarding /
-NAT44-module setup. See docs/hardware.md § Radios and docs/podman-deploy.md.
+integration (HAOS-only add-on otherwise).
+
+**Thread target: a Home Assistant OTBR on this box.** An OTBR container
+(`podman/otbr.container`) uses the Sonoff dongle (OpenThread RCP) as its
+Thread radio, and HA connects to it through the Open Thread Border Router
+integration. HA's Thread network becomes the preferred dataset. **Status
+(2026-09-15): planned, not deployed** — the dongle is attached, but the
+container hasn't been re-added yet. Until then Thread is served by the Google
+Nest Wifi border routers over mDNS.
+
+A first on-host OTBR ran 2026-08-25 → 2026-08-28 and was removed. Re-adding
+it, including its host IPv6-forwarding and NAT44-module setup, is now the
+plan. Carry that attempt's fixes forward; they are listed in
+docs/hardware.md § Radios. See also docs/podman-deploy.md.

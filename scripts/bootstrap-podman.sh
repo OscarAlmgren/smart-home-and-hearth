@@ -66,18 +66,17 @@ Podman is ready. Remaining steps, in order:
          # edit both with real values
          chmod 600 config/secrets.yaml .env.prod.secret
 
-  2. Start Matter — Thread is served off-host by the Google/Nest Wifi Thread
-     Border Router (the on-host OTBR container was decommissioned 2026-08-28),
-     so matter-server just needs to reach it over mDNS on the LAN.
+  2. Start Matter. matter-server reaches the Thread Border Router over mDNS:
+     the Google Nest Wifi border routers today, and later the planned on-host
+     Home Assistant OTBR (Sonoff dongle as radio, see docs/hardware.md § Radios).
 
      NOTE: this is a Quadlet unit (podman/*.container) — systemd's own
      `enable` doesn't apply to it (its WantedBy= is already applied by the
      generator at daemon-reload, which just ran above). Just start it:
          sudo systemctl start matter-server.service
 
-     Zigbee (ZHA): once the Sonoff dongle is re-flashed to Zigbee coordinator
-     firmware, uncomment the AddDevice= line in podman/homeassistant.container
-     with its /dev/serial/by-id/ path — see docs/hardware.md § Radios.
+     The Sonoff dongle is the Thread radio for that OTBR, not a Zigbee
+     coordinator. Do not pass it to homeassistant.container.
 
   3. Start Home Assistant (also a Quadlet unit — `start`, not `enable`;
      ha-sync-config.service starts automatically as its dependency, no

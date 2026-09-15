@@ -2,9 +2,10 @@
 
 Home Assistant running on **Podman Quadlets** on `henrybook` (bare metal —
 MicroK8s was decommissioned 2026-08-06). Recorder DB is SQLite. Matter runs
-on-host via `matter-server.container`; Thread is served off-host by a
-Google/Nest Wifi Thread Border Router (an on-host OTBR was tried and
-decommissioned 2026-08-28). Zigbee/ZHA is pending a dongle re-flash.
+on-host via `matter-server.container`. Thread is moving to a Home Assistant
+OTBR on this box, with the Sonoff dongle (OpenThread RCP) as the Thread radio.
+That is planned but not deployed yet; until then Thread is served by Google
+Nest Wifi border routers. No Zigbee radio.
 
 > **Live deployment:** **[docs/podman-deploy.md](docs/podman-deploy.md)**. Start there.
 > **[docs/MIGRATION.md](docs/MIGRATION.md)** is kept as the historical record of the
@@ -93,9 +94,9 @@ This is **not** how the server runs anything. Do not deploy from it.
   `/var/lib/smart-home-and-hearth/` on a 16 GB flash module with ~12 GiB usable.
   Ask before changing any retention setting or moving anything to the HDD — see
   [CLAUDE.md](CLAUDE.md).
-- **The Sonoff dongle is being re-flashed from OpenThread RCP back to Zigbee**
-  now that Thread runs on the Nest Wifi border router, not this box. USB 2.0
-  port on an extension cable when it goes in: USB 3.0 controllers emit 2.4 GHz
-  noise that degrades Zigbee badly.
+- **The Sonoff dongle is the Thread radio** (OpenThread RCP) for the planned
+  Home Assistant OTBR, despite "Zigbee" in its USB name. Keep it on a USB 2.0
+  port with an extension cable: USB 3.0 controllers emit 2.4 GHz noise that
+  degrades Thread badly.
 - **Disk exhaustion is the most likely failure mode.** The root-filesystem alert
   is the most valuable thing in the monitoring stack.

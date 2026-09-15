@@ -62,8 +62,12 @@ actually shipped):
 - **On-host OTBR decommissioned 2026-08-28.** The containerized OpenThread
   Border Router ran only 2026-08-25 → 2026-08-28. Thread now runs on the
   household's Google/Nest Wifi Thread Border Router, discovered by Home
-  Assistant over mDNS; the Sonoff dongle is being re-flashed back to Zigbee.
-  See docs/hardware.md § Radios.
+  Assistant over mDNS.
+- **Reversed 2026-09-15: Home Assistant OTBR planned again.** The 2019 Nest
+  Wifi units each run a separate Thread network that can't be merged, and
+  Thread router devices kept dropping out of HA. The Sonoff dongle stays on
+  OpenThread RCP as the radio for an on-host OTBR managed from HA; Zigbee
+  stays without a radio. See docs/hardware.md § Radios.
 
 ---
 

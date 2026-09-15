@@ -1,7 +1,8 @@
 # Podman deployment (replaces MicroK8s)
 
-**Status: Home Assistant (SQLite recorder) + Matter (Thread served off-host by
-the Google/Nest Wifi Thread Border Router) + backup/restore.** Monitoring
+**Status: Home Assistant (SQLite recorder) + Matter + backup/restore.** Thread
+is served by the Google Nest Wifi border routers for now; a Home Assistant
+OTBR on this box (Sonoff dongle as the radio) is planned. Monitoring
 (Alloy) and the git-pull deploy loop that replaces Argo CD are not ported yet. `k8s/` and `argocd/` are left in place for reference until the
 cutover is confirmed working; they are not deleted by this doc.
 
@@ -35,11 +36,12 @@ shape, not new territory for this hardware.
 
 Also new since the MicroK8s version and not a straight port of anything:
 `podman/matter-server.container`, the containerized Matter Server that
-replaces HAOS's supervisor add-on. Thread itself is no longer run on this
-box — an on-host OpenThread Border Router (`otbr.container`) was tried and
-then decommissioned 2026-08-28; a Google/Nest Wifi Thread Border Router now
-serves Thread, and Home Assistant discovers it over mDNS through the Matter
-integration. See docs/hardware.md § Radios.
+replaces HAOS's supervisor add-on. An on-host OpenThread Border Router
+(`otbr.container`) ran 2026-08-25 → 2026-08-28 and was removed in favour of
+the Google Nest Wifi border routers. That decision has been reversed: the plan
+is to re-add `otbr.container` with the Sonoff dongle (OpenThread RCP) as its
+radio, managed from HA's Open Thread Border Router integration. See
+docs/hardware.md § Radios.
 
 ## Secrets
 
@@ -60,7 +62,7 @@ cd /home/oscaralmgren/smart-home-and-hearth
 ./scripts/bootstrap-podman.sh
 ```
 
-Follow the printed next steps (secrets, Zigbee device path, enabling the
+Follow the printed next steps (secrets, enabling the
 units). Full sequence is in `scripts/bootstrap-podman.sh`'s own output.
 
 ## Verification
@@ -74,7 +76,7 @@ ls -lh /var/lib/smart-home-and-hearth/ha-config/home-assistant_v2.db   # recorde
 
 - [ ] Home Assistant reachable at `http://<server-ip>:8123`; onboarding completes
 - [ ] Recorder is on SQLite — `home-assistant_v2.db` exists in `/var/lib/smart-home-and-hearth/ha-config`, no `postgres` container running
-- [ ] Add the Matter integration in HA pointing at `ws://127.0.0.1:5580/ws`; the Thread integration discovers the Nest Wifi border router over mDNS and shows its dataset as preferred
+- [ ] Add the Matter integration in HA pointing at `ws://127.0.0.1:5580/ws`; the Thread integration discovers the border router over mDNS (Nest Wifi today; the HA OTBR's dataset should become preferred once it is deployed)
 - [ ] `systemctl reboot` — all units come back on their own (`WantedBy=multi-user.target`)
 - [ ] Edit `config/configuration.yaml` in git, `git pull` on the server, `systemctl restart homeassistant.service` — change takes effect (manual for now; see Known gaps)
 - [ ] **Optional, not required for a first deploy** — once real `RESTIC_*`/`AWS_*` values are in `.env.prod.secret` and `backup.timer` is enabled: `sudo systemctl start backup.service` (runs it once, on demand) completes without error — `journalctl -u backup.service`

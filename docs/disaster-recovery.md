@@ -57,9 +57,10 @@ the time: `otbr.container`'s `Sysctl=` lines don't work under podman 5.7.0
 with `Network=host` (moved to host-level `/etc/sysctl.d/`), and OTBR's own
 entrypoint needs NAT44 kernel modules loaded on the host
 (`/etc/modules-load.d/`). Both were moot after **2026-08-28, when the on-host
-OTBR was decommissioned** — Thread moved to the Google/Nest Wifi border
-router (see [hardware.md § Radios](hardware.md#radios)) — and those host
-files were removed.
+OTBR was decommissioned** and those host files were removed. As of
+2026-09-15 an on-host Home Assistant OTBR is planned again (see
+[hardware.md § Radios](hardware.md#radios)), so both workarounds will be
+needed once more.
 
 Separately, image pulls stage in `/var/tmp` (`image_copy_tmp_dir` in
 `containers.conf`) regardless of where the podman store's `graphroot`
@@ -86,11 +87,12 @@ Assistant.
 Full exclude list and the reasoning:
 [`podman/restic-excludes.txt`](../podman/restic-excludes.txt).
 
-Once a Zigbee dongle is added (see docs/hardware.md § Radios),
-`/config/zigbee.db` joins this tier — losing it means re-pairing every Zigbee
-device by hand. It is not in the general excludes, so it rides along with the
-rest of `/config`. (Thread/Matter devices are homed on the Nest Wifi border
-router, off this box — there is no on-host Thread dataset to back up.)
+Once the Home Assistant OTBR is deployed (see docs/hardware.md § Radios), its
+Thread network dataset joins this tier. Losing it means re-commissioning
+every Thread device by hand. The OTBR's data directory must be added to the
+backup set at that point, since it lives outside `/config`. Until then Thread
+devices are homed on the Nest Wifi border routers and there is no on-host
+dataset. (Zigbee has no radio, so there is no `zigbee.db`.)
 
 ### 2. The recorder database
 
@@ -205,10 +207,10 @@ Check, in the restored instance:
       broken)
 - [ ] Dashboards render as you built them
 - [ ] History shows data from before the snapshot (proves the recorder DB restored)
-- [ ] Once a Zigbee dongle is added: device registries survive with no radio
-      attached (proves `zigbee.db` restored — it rides along in `/config`).
-      Thread/Matter devices live on the Nest Wifi border router, not this
-      box, so there is nothing on-host to restore for them.
+- [ ] Once the Home Assistant OTBR is deployed: its Thread dataset is in the
+      snapshot, with the same network name, PAN ID and extended PAN ID as
+      live. Until then Thread devices are homed on the Nest Wifi border
+      routers, so there is nothing on-host to restore for them.
 
 Then tear it down (the drill script prints these same commands at the end):
 

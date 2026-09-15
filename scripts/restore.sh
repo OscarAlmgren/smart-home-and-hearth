@@ -124,9 +124,9 @@ Verify — this is the part that matters (docs/disaster-recovery.md § The resto
   [ ] Devices and entities are present with their ORIGINAL entity IDs
   [ ] Dashboards render as you built them
   [ ] History shows data from before the snapshot (proves the DB restore)
-  [ ] Once a Zigbee dongle is added: device registries survive with no radio
-      attached (proves zigbee.db restored). Thread/Matter devices are homed
-      on the Nest Wifi border router, not on this box — nothing to restore.
+  [ ] Once the Home Assistant OTBR is deployed: its Thread dataset is in the
+      snapshot (same network name / PAN ID / ext PAN ID as live). Until then
+      Thread devices are homed on the Nest Wifi border routers — nothing to restore.
 
 Tear down when done:
 

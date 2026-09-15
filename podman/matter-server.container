@@ -3,12 +3,13 @@
 # Server add-on only exists under HAOS's supervisor.
 #
 # Talks to HA over websocket (ws://127.0.0.1:5580/ws — add the Matter
-# integration in the HA UI once this is up) and reaches Thread devices via
-# an external Thread Border Router (the Google/Nest Wifi TBR), discovered
-# over mDNS. No host Bluetooth is needed here: Matter-over-Thread
-# commissioning happens from a phone's own BLE, which then hands the device
-# off onto the Thread mesh the Nest TBR routes. This box has no Bluetooth
-# adapter anyway (docs/hardware.md).
+# integration in the HA UI once this is up) and reaches Thread devices via a
+# Thread Border Router discovered over mDNS: today the Google/Nest Wifi
+# border routers, and once it is deployed, the on-host OTBR container with
+# the Sonoff dongle as its radio (docs/hardware.md § Radios). Commissioning
+# currently happens from a phone's own BLE, which hands the device off onto
+# the Thread mesh. The host has had a USB Bluetooth adapter since 2026-09-15,
+# but it is only wired into Home Assistant, not into this container.
 #
 # Install: copy into /etc/containers/systemd/. See docs/podman-deploy.md.
 [Unit]

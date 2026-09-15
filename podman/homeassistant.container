@@ -44,17 +44,18 @@ Environment=TZ=Europe/Stockholm
 Volume=/var/lib/smart-home-and-hearth/ha-config:/config
 # Home Assistant reads /etc/localtime in addition to TZ.
 Volume=/etc/localtime:/etc/localtime:ro
+# Bluetooth: HA drives the host adapter through the host's BlueZ daemon
+# over the system D-Bus socket (--privileged alone is not enough; HA does
+# not run its own bluetoothd). Needs bluez installed and bluetooth.service
+# enabled on the host.
+Volume=/run/dbus:/run/dbus:ro
 
-# Zigbee (ZHA): the Sonoff dongle is being re-flashed from OpenThread RCP
-# back to Zigbee coordinator firmware, now that Thread is served off-host by
-# the Google/Nest Wifi Thread Border Router (the on-host otbr.container was
-# decommissioned 2026-08-28). Once the dongle is re-flashed and seated in a
-# USB 2.0 port on an extension cable:
-#   ls -l /dev/serial/by-id/
-# then uncomment the line below with that path. Never /dev/ttyACM0 — kernel
-# enumeration order changes across reboots and will silently point ZHA at
-# the wrong radio. This dongle's by-id path ends -if00 (no -port0 suffix).
-# AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00:/dev/zigbee
+# No serial radio is passed to Home Assistant. The Sonoff dongle
+# (/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00)
+# runs OpenThread RCP firmware and is the Thread radio for the planned on-host
+# OTBR container, which HA talks to through its Open Thread Border Router
+# integration — never AddDevice= it here. Zigbee/ZHA has no radio and would
+# need a second dongle. See docs/hardware.md § Radios.
 
 # Privileged + host network together are what --memory needs PodmanArgs for;
 # neither has a first-class Quadlet key.
