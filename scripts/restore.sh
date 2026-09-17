@@ -39,6 +39,7 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 if [[ "$TARGET" == "prod" ]]; then
   CONFIG_DIR="/var/lib/smart-home-and-hearth/ha-config"
+  OTBR_DIR="/var/lib/smart-home-and-hearth/otbr"
 else
   CONFIG_DIR="/var/lib/smart-home-and-hearth-drill/ha-config"
 fi
@@ -53,8 +54,8 @@ if [[ "$TARGET" == "prod" && $ASSUME_YES -eq 0 ]]; then
   │  You are about to restore over the LIVE Home Assistant install.    │
   │                                                                    │
   │  This overwrites ${CONFIG_DIR}
-  │  — the entity registry, the recorder database and every dashboard   │
-  │  — with the contents of snapshot:                                   │
+  │  and the OTBR Thread dataset — the entity registry, the recorder    │
+  │  database and every dashboard — with the contents of snapshot:      │
   │  ${SNAPSHOT}
   │                                                                    │
   │  Current state that is not in the snapshot will be lost.           │
@@ -69,10 +70,11 @@ EOF
 fi
 
 # ── 1. Stop writers ──────────────────────────────────────────────────────────
-# Restoring underneath a running recorder produces a corrupt result.
+# Restoring underneath a running recorder or a running OTBR agent produces a
+# corrupt result.
 if [[ "$TARGET" == "prod" ]]; then
-  say "Stopping Home Assistant"
-  sudo systemctl stop homeassistant.service
+  say "Stopping Home Assistant and OTBR"
+  sudo systemctl stop homeassistant.service otbr.service
 fi
 
 # ── 2. Restore config + the staged DB snapshot ──────────────────────────────
@@ -97,8 +99,15 @@ sudo cp "$STAGING/staging/home-assistant_v2.db" "$CONFIG_DIR/home-assistant_v2.d
 sudo rm -f "$CONFIG_DIR/home-assistant_v2.db-shm" "$CONFIG_DIR/home-assistant_v2.db-wal"
 
 if [[ "$TARGET" == "prod" ]]; then
-  say "Starting Home Assistant"
-  sudo systemctl start homeassistant.service
+  say "Restoring the OTBR Thread dataset"
+  sudo mkdir -p "$OTBR_DIR"
+  podman run --rm \
+    -e RESTIC_REPOSITORY -e RESTIC_PASSWORD -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+    -v "$OTBR_DIR:/otbr" \
+    "$RESTIC_IMAGE" restic restore "${SNAPSHOT}" --target / --include /otbr
+
+  say "Starting Home Assistant and OTBR"
+  sudo systemctl start otbr.service homeassistant.service
   exit 0
 fi
 
@@ -124,9 +133,9 @@ Verify — this is the part that matters (docs/disaster-recovery.md § The resto
   [ ] Devices and entities are present with their ORIGINAL entity IDs
   [ ] Dashboards render as you built them
   [ ] History shows data from before the snapshot (proves the DB restore)
-  [ ] Once the Home Assistant OTBR is deployed: its Thread dataset is in the
-      snapshot (same network name / PAN ID / ext PAN ID as live). Until then
-      Thread devices are homed on the Nest Wifi border routers — nothing to restore.
+  [ ] The OTBR Thread dataset is in the snapshot: restic ls ${SNAPSHOT} /otbr
+      lists a *.data settings file (the drill doesn't start an OTBR; prod
+      owns the radio). HA's copy of the dataset is in /config/.storage/thread.datasets.
 
 Tear down when done:
 

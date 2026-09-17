@@ -1,0 +1,106 @@
+# OpenThread Border Router for Home Assistant's own Thread network. HA runs
+# as a container here, not HAOS, so there is no OTBR add-on: this container
+# drives the Sonoff dongle (OpenThread RCP firmware) and HA manages it through
+# its Open Thread Border Router integration at http://127.0.0.1:8081.
+# See docs/hardware.md § Radios.
+#
+# Install: copy into /etc/containers/systemd/, same as the other units here.
+# Host prerequisites that can't live in this file (forwarding sysctls, NAT
+# kernel modules, netplan accept-ra): docs/podman-deploy.md § Host prerequisites.
+[Unit]
+Description=OpenThread Border Router (Thread radio for Home Assistant)
+After=network-online.target
+Wants=network-online.target
+
+# Wait for the dongle at boot and stop when it is unplugged. With the dongle
+# missing the unit fails its dependency or is skipped, instead of
+# crash-looping (the 2026-08-25 incident in docs/disaster-recovery.md).
+After=dev-serial-by\x2did-usb\x2dITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748\x2dif00.device
+BindsTo=dev-serial-by\x2did-usb\x2dITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748\x2dif00.device
+ConditionPathExists=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00
+
+# StartLimitIntervalSec/StartLimitBurst only take effect in [Unit]; systemd
+# silently ignores them in [Service]. See homeassistant.container.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Container]
+# Docker Hub only publishes :latest, so pin by digest (pulled 2026-09-15,
+# image built 2026-09-14). Re-pin deliberately; don't float.
+Image=docker.io/openthread/otbr@sha256:51a54d9f3795236cae84850c3232ff6a62ec9cf42003410b9692b393b6eba9c2
+ContainerName=otbr
+
+# OTBR manipulates the host's IPv6 routes and ip6tables, creates wpan0, and
+# advertises the Thread network over mDNS on the LAN, so it needs the host
+# netns and privileges (same as homeassistant.container). Only one NIC:
+# enp3s0 is the infrastructure link.
+Network=host
+PodmanArgs=--privileged
+
+# The by-id name comes from the dongle's USB-UART bridge (WCH CH9102,
+# 1a86:55d4), not the EFR32 radio firmware, so reflashing never changes it.
+AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00:/dev/ttyOTBR
+
+# Thread network dataset (keys, PAN ID, channel). Losing it means forming a
+# new network and re-commissioning every Thread device. Backed up by
+# scripts/backup.sh.
+Volume=/var/lib/smart-home-and-hearth/otbr:/var/lib/thread
+
+# The image's startup script runs `sysctl --system` over its own
+# /etc/sysctl.d. With host networking and --privileged that rewrites the
+# HOST's kernel settings (rp_filter=1, kernel accept_ra=2 on the infra link,
+# which duplicates systemd-networkd's RA handling). Host sysctls are owned by
+# podman/host-config/ instead. notmpcopyup keeps the tmpfs empty; podman
+# otherwise copies the image's files into it.
+Tmpfs=/etc/sysctl.d:notmpcopyup
+
+# The web GUI can form or join networks and isn't needed: HA is the manager.
+Environment=WEB_GUI=0
+# Used by the image's NAT44 rules (defaults to eth0).
+Environment=INFRA_IF_NAME=enp3s0
+
+# The REST API listens on 127.0.0.1:8081 by default (HTTP_HOST/REST_HOST).
+# It's unauthenticated and can read or replace the network key, so keep it on
+# loopback; HA is host-networked and reaches it there.
+# 460800 baud matches the Silabs OpenThread RCP build on this dongle
+# (SL-OPENTHREAD/2.5.3.0). --debug-level defaults to 7, which buried the
+# journal during the first OTBR attempt; 5 is notice.
+#
+# Do NOT add &uart-flow-control here. Tried 2026-09-17 against the "no
+# response from RCP" dropouts; it made them worse - agent lifetime fell from
+# 3h12m/~10h to 18min/10min - which fits RTS/CTS not being wired through this
+# dongle's CH9102 bridge, so the host stalls waiting on a CTS that never
+# asserts. Reverted the same day.
+Exec=--radio-url spinel+hdlc+uart:///dev/ttyOTBR?uart-baudrate=460800 -B enp3s0 --debug-level 5
+
+# The image has no wget/curl. Check that otbr-agent answers, not its Thread
+# role: the agent is legitimately "disabled" until a dataset is formed.
+#
+# This check is the ONLY thing that recovers a dead agent: when otbr-agent
+# exits (it does - "no response from RCP", 14 times over 2026-09-16/17), the
+# container stays up because the entrypoint goes on tailing /var/log/syslog,
+# so systemd sees a healthy unit and Restart=on-failure never fires.
+# kill (not restart) makes the unit fail so the restart counts toward
+# StartLimitBurst above; podman's in-place restart would bypass that cap.
+# 30s x 3 retries recovers a dead agent in ~1.5 min. Looser timings
+# (60s x 5) were tried on 2026-09-17 and left the border router dead for ~5
+# minutes, long enough to fail a commissioning attempt; the RCP dies often
+# enough that recovery speed matters more than the occasional false kill.
+# Each check makes the agent log a "Failed to write CLI output: Broken pipe"
+# warning; that is noise, not a fault.
+HealthCmd=ot-ctl state
+HealthInterval=30s
+HealthTimeout=15s
+HealthStartPeriod=60s
+HealthRetries=3
+HealthOnFailure=kill
+
+[Service]
+# Known quirk: the image's NAT44 iptables rules are appended on every start
+# and not removed on stop. The duplicates are identical, harmless, and gone
+# after a reboot.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target default.target

@@ -57,10 +57,10 @@ the time: `otbr.container`'s `Sysctl=` lines don't work under podman 5.7.0
 with `Network=host` (moved to host-level `/etc/sysctl.d/`), and OTBR's own
 entrypoint needs NAT44 kernel modules loaded on the host
 (`/etc/modules-load.d/`). Both were moot after **2026-08-28, when the on-host
-OTBR was decommissioned** and those host files were removed. As of
-2026-09-15 an on-host Home Assistant OTBR is planned again (see
-[hardware.md § Radios](hardware.md#radios)), so both workarounds will be
-needed once more.
+OTBR was decommissioned** and those host files were removed. The OTBR was
+re-added 2026-09-15 with both workarounds restored (see
+[podman-deploy.md § Host prerequisites](podman-deploy.md#host-prerequisites)
+and [hardware.md § Radios](hardware.md#radios)).
 
 Separately, image pulls stage in `/var/tmp` (`image_copy_tmp_dir` in
 `containers.conf`) regardless of where the podman store's `graphroot`
@@ -87,12 +87,14 @@ Assistant.
 Full exclude list and the reasoning:
 [`podman/restic-excludes.txt`](../podman/restic-excludes.txt).
 
-Once the Home Assistant OTBR is deployed (see docs/hardware.md § Radios), its
-Thread network dataset joins this tier. Losing it means re-commissioning
-every Thread device by hand. The OTBR's data directory must be added to the
-backup set at that point, since it lives outside `/config`. Until then Thread
-devices are homed on the Nest Wifi border routers and there is no on-host
-dataset. (Zigbee has no radio, so there is no `zigbee.db`.)
+The Home Assistant OTBR's Thread network dataset
+(`/var/lib/smart-home-and-hearth/otbr`, deployed 2026-09-15 — see
+docs/hardware.md § Radios) is in this tier too. Losing it means forming a new
+network and re-commissioning every Thread device by hand. It lives outside
+`/config`, so `scripts/backup.sh` backs it up as `/otbr` and
+`scripts/restore.sh --target prod` restores it. HA also keeps a copy of the
+dataset in `.storage/thread.datasets`. (Zigbee has no radio, so there is no
+`zigbee.db`.)
 
 ### 2. The recorder database
 
@@ -207,10 +209,10 @@ Check, in the restored instance:
       broken)
 - [ ] Dashboards render as you built them
 - [ ] History shows data from before the snapshot (proves the recorder DB restored)
-- [ ] Once the Home Assistant OTBR is deployed: its Thread dataset is in the
-      snapshot, with the same network name, PAN ID and extended PAN ID as
-      live. Until then Thread devices are homed on the Nest Wifi border
-      routers, so there is nothing on-host to restore for them.
+- [ ] The OTBR Thread dataset is in the snapshot: `restic ls <snapshot> /otbr`
+      lists its `*.data` settings file, and the restored
+      `.storage/thread.datasets` shows `ha-thread-a999` (PAN `0xa999`, ext PAN
+      `65cb0d082358c46f`) as preferred
 
 Then tear it down (the drill script prints these same commands at the end):
 

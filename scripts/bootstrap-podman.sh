@@ -45,12 +45,31 @@ say "Podman version: $podman_major_minor"
 # .storage, entity registry, Thread network dataset).
 say "Creating runtime data directories"
 sudo mkdir -p /var/lib/smart-home-and-hearth/ha-config
+sudo mkdir -p /var/lib/smart-home-and-hearth/otbr
 sudo mkdir -p /var/lib/smart-home-and-hearth/matter-server
+
+# ── OTBR host prerequisites ─────────────────────────────────────────────────
+# otbr.container can't set these itself (podman 5.7.0 rejects per-container
+# Sysctl= under Network=host, and its entrypoint's NAT44 setup needs netfilter
+# kernel modules present) - see podman/host-config/ and
+# docs/podman-deploy.md § Host prerequisites.
+#
+# IPv6 forwarding makes systemd-networkd stop accepting router advertisements
+# unless netplan pins accept-ra. Applying netplan over SSH can drop the
+# connection, so this script only checks for it.
+say "Installing OTBR host prerequisites (sysctls, kernel modules)"
+if ! sudo netplan get ethernets.enp3s0.accept-ra 2>/dev/null | grep -qx true; then
+  die "Set 'accept-ra: true' for enp3s0 in /etc/netplan/ and apply it before enabling IPv6 forwarding - see docs/podman-deploy.md § Host prerequisites."
+fi
+sudo cp podman/host-config/99-otbr-forwarding.conf /etc/sysctl.d/
+sudo sysctl --load=/etc/sysctl.d/99-otbr-forwarding.conf >/dev/null
+sudo cp podman/host-config/otbr-nat-modules.conf /etc/modules-load.d/
+sudo modprobe -a iptable_nat iptable_mangle iptable_filter ip6table_filter
 
 # ── Quadlets and plain units ─────────────────────────────────────────────────
 say "Installing Quadlet units"
 sudo mkdir -p /etc/containers/systemd
-sudo cp podman/homeassistant.container podman/matter-server.container /etc/containers/systemd/
+sudo cp podman/homeassistant.container podman/otbr.container podman/matter-server.container /etc/containers/systemd/
 sudo cp podman/ha-sync-config.service podman/backup.service podman/backup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 
@@ -66,17 +85,21 @@ Podman is ready. Remaining steps, in order:
          # edit both with real values
          chmod 600 config/secrets.yaml .env.prod.secret
 
-  2. Start Matter. matter-server reaches the Thread Border Router over mDNS:
-     the Google Nest Wifi border routers today, and later the planned on-host
-     Home Assistant OTBR (Sonoff dongle as radio, see docs/hardware.md § Radios).
+  2. Start Thread and Matter. otbr.container drives the Sonoff dongle
+     (OpenThread RCP) as Home Assistant's Thread Border Router; matter-server
+     reaches Thread devices through it (see docs/hardware.md § Radios).
 
-     NOTE: this is a Quadlet unit (podman/*.container) — systemd's own
-     `enable` doesn't apply to it (its WantedBy= is already applied by the
-     generator at daemon-reload, which just ran above). Just start it:
-         sudo systemctl start matter-server.service
+     NOTE: these are Quadlet units (podman/*.container) — systemd's own
+     `enable` doesn't apply to them (their WantedBy= is already applied by
+     the generator at daemon-reload, which just ran above). Just start them:
+         sudo systemctl start otbr.service matter-server.service
 
-     The Sonoff dongle is the Thread radio for that OTBR, not a Zigbee
-     coordinator. Do not pass it to homeassistant.container.
+     On a fresh /var/lib/smart-home-and-hearth/otbr there is no Thread
+     network yet: form or restore one before adding the Open Thread Border
+     Router integration in HA — see docs/podman-deploy.md § Thread network.
+
+     The Sonoff dongle is the Thread radio, not a Zigbee coordinator. Do not
+     pass it to homeassistant.container.
 
   3. Start Home Assistant (also a Quadlet unit — `start`, not `enable`;
      ha-sync-config.service starts automatically as its dependency, no

@@ -14,6 +14,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CONFIG_DIR="/var/lib/smart-home-and-hearth/ha-config"
+OTBR_DIR="/var/lib/smart-home-and-hearth/otbr"
 RESTIC_IMAGE="restic/restic:0.17.3"
 
 STAGING=$(mktemp -d)
@@ -37,6 +38,7 @@ podman run --rm \
   -e RESTIC_REPOSITORY -e RESTIC_PASSWORD -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
   -v "$STAGING:/staging:ro" \
   -v "$CONFIG_DIR:/config:ro" \
+  -v "$OTBR_DIR:/otbr:ro" \
   -v "$PWD/podman/restic-excludes.txt:/etc/restic/excludes.txt:ro" \
   "$RESTIC_IMAGE" sh -eu -c '
     if ! restic cat config >/dev/null 2>&1; then
@@ -45,11 +47,14 @@ podman run --rm \
     fi
 
     echo "==> backing up"
+    # /otbr holds the Thread network dataset (keys, PAN ID, channel). Losing
+    # it means forming a new Thread network and re-commissioning every Thread
+    # device, the Thread equivalent of /config/zigbee.db.
     restic backup \
       --host homeassistant \
       --tag automated \
       --exclude-file /etc/restic/excludes.txt \
-      /staging /config
+      /staging /config /otbr
 
     echo "==> applying retention"
     restic forget \

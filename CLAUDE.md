@@ -32,7 +32,7 @@ slow to diagnose.
   (`usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00`)
   when it is passed to `podman/otbr.container`.
 - **The Sonoff dongle is the Thread radio, not a Zigbee coordinator.** It runs
-  OpenThread RCP firmware for the planned Home Assistant OTBR, despite
+  OpenThread RCP firmware for the Home Assistant OTBR, despite
   "Zigbee" in its USB name. Don't re-flash it to Zigbee and don't pass it to
   the Home Assistant container. See § Current: Matter/Thread.
 - **No CPU limit on the Home Assistant container.** The node has 2 slow cores;
@@ -93,15 +93,15 @@ Do not add these without being asked — they are scoped to later phases:
 `python-matter-server` (`podman/matter-server.container`) backs HA's Matter
 integration (HAOS-only add-on otherwise).
 
-**Thread target: a Home Assistant OTBR on this box.** An OTBR container
-(`podman/otbr.container`) uses the Sonoff dongle (OpenThread RCP) as its
-Thread radio, and HA connects to it through the Open Thread Border Router
-integration. HA's Thread network becomes the preferred dataset. **Status
-(2026-09-15): planned, not deployed** — the dongle is attached, but the
-container hasn't been re-added yet. Until then Thread is served by the Google
-Nest Wifi border routers over mDNS.
+**Thread: a Home Assistant OTBR on this box — deployed 2026-09-15.**
+`podman/otbr.container` uses the Sonoff dongle (OpenThread RCP) as its Thread
+radio, and HA manages it through the Open Thread Border Router integration
+(`http://127.0.0.1:8081`). Its network, `ha-thread-a999` (channel 20), is HA's
+preferred Thread dataset. Existing Matter-over-Thread devices are being
+re-commissioned onto it; until the last one moves, some are still reached
+through the Google Nest Wifi border routers.
 
-A first on-host OTBR ran 2026-08-25 → 2026-08-28 and was removed. Re-adding
-it, including its host IPv6-forwarding and NAT44-module setup, is now the
-plan. Carry that attempt's fixes forward; they are listed in
-docs/hardware.md § Radios. See also docs/podman-deploy.md.
+Host prerequisites the unit depends on (forwarding sysctls, NAT44 modules,
+netplan `accept-ra`) are in docs/podman-deploy.md § Host prerequisites — don't
+drop `accept-ra` while IPv6 forwarding is on. The lessons from both OTBR
+attempts are in docs/hardware.md § Radios.
