@@ -2,8 +2,8 @@
 
 **Status: Home Assistant (SQLite recorder) + OTBR (Thread) + Matter +
 backup/restore.** Thread is served by an on-host OpenThread Border Router with
-the Sonoff dongle as its radio, deployed 2026-09-15; devices are still being
-moved over from the Google Nest Wifi Thread networks. Monitoring
+a Connect ZBT-1 as its radio, deployed 2026-09-15 (radio swapped 2026-09-19);
+devices are still being moved over from the Google Nest Wifi Thread networks. Monitoring
 (Alloy) and the git-pull deploy loop that replaces Argo CD are not ported yet. `k8s/` and `argocd/` are left in place for reference until the
 cutover is confirmed working; they are not deleted by this doc.
 

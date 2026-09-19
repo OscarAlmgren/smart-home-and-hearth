@@ -85,7 +85,7 @@ Podman is ready. Remaining steps, in order:
          # edit both with real values
          chmod 600 config/secrets.yaml .env.prod.secret
 
-  2. Start Thread and Matter. otbr.container drives the Sonoff dongle
+  2. Start Thread and Matter. otbr.container drives the Connect ZBT-1
      (OpenThread RCP) as Home Assistant's Thread Border Router; matter-server
      reaches Thread devices through it (see docs/hardware.md § Radios).
 
@@ -98,8 +98,10 @@ Podman is ready. Remaining steps, in order:
      network yet: form or restore one before adding the Open Thread Border
      Router integration in HA — see docs/podman-deploy.md § Thread network.
 
-     The Sonoff dongle is the Thread radio, not a Zigbee coordinator. Do not
-     pass it to homeassistant.container.
+     The ZBT-1 is the Thread radio, not a Zigbee coordinator. Do not pass it
+     to homeassistant.container. If the radio is ever swapped, update the
+     by-id path, both device units and the baud/flow-control settings in
+     podman/otbr.container — see docs/hardware.md § Radios.
 
   3. Start Home Assistant (also a Quadlet unit — `start`, not `enable`;
      ha-sync-config.service starts automatically as its dependency, no

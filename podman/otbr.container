@@ -15,9 +15,9 @@ Wants=network-online.target
 # Wait for the dongle at boot and stop when it is unplugged. With the dongle
 # missing the unit fails its dependency or is skipped, instead of
 # crash-looping (the 2026-08-25 incident in docs/disaster-recovery.md).
-After=dev-serial-by\x2did-usb\x2dITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748\x2dif00.device
-BindsTo=dev-serial-by\x2did-usb\x2dITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748\x2dif00.device
-ConditionPathExists=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00
+After=dev-serial-by\x2did-usb\x2dNabu_Casa_SkyConnect_v1.0_ba5a55b0af14ed118fc4b48be054580b\x2dif00\x2dport0.device
+BindsTo=dev-serial-by\x2did-usb\x2dNabu_Casa_SkyConnect_v1.0_ba5a55b0af14ed118fc4b48be054580b\x2dif00\x2dport0.device
+ConditionPathExists=/dev/serial/by-id/usb-Nabu_Casa_SkyConnect_v1.0_ba5a55b0af14ed118fc4b48be054580b-if00-port0
 
 # StartLimitIntervalSec/StartLimitBurst only take effect in [Unit]; systemd
 # silently ignores them in [Service]. See homeassistant.container.
@@ -37,9 +37,13 @@ ContainerName=otbr
 Network=host
 PodmanArgs=--privileged
 
-# The by-id name comes from the dongle's USB-UART bridge (WCH CH9102,
-# 1a86:55d4), not the EFR32 radio firmware, so reflashing never changes it.
-AddDevice=/dev/serial/by-id/usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00:/dev/ttyOTBR
+# HA Connect ZBT-1 (sold as SkyConnect, EFR32MG21) on a Silabs CP2102N bridge
+# (10c4:ea60), replacing a Sonoff ZBDongle-E whose radio failed 2026-09-17.
+# The by-id name comes from the bridge, not the radio firmware, so reflashing
+# never changes it - but swapping the dongle does: this path, the two device
+# units above and the baud/flow-control settings below are all per-dongle.
+# Note the -if00-port0 suffix, which the Sonoff did not have.
+AddDevice=/dev/serial/by-id/usb-Nabu_Casa_SkyConnect_v1.0_ba5a55b0af14ed118fc4b48be054580b-if00-port0:/dev/ttyOTBR
 
 # Thread network dataset (keys, PAN ID, channel). Losing it means forming a
 # new network and re-commissioning every Thread device. Backed up by
@@ -62,16 +66,18 @@ Environment=INFRA_IF_NAME=enp3s0
 # The REST API listens on 127.0.0.1:8081 by default (HTTP_HOST/REST_HOST).
 # It's unauthenticated and can read or replace the network key, so keep it on
 # loopback; HA is host-networked and reaches it there.
-# 460800 baud matches the Silabs OpenThread RCP build on this dongle
-# (SL-OPENTHREAD/2.5.3.0). --debug-level defaults to 7, which buried the
-# journal during the first OTBR attempt; 5 is notice.
+# 460800 baud + hardware flow control match the firmware flashed on this
+# dongle (skyconnect_openthread_rcp 2.7.2.0, Nabu Casa release v2026.02.23:
+# its GBL metadata reports baudrate=460800 and no "no_flow" variant, and the
+# ZBT-1's CP2102N has RTS/CTS wired). Read the GBL metadata after any reflash
+# rather than assuming - `universal-silabs-flasher dump-gbl-metadata`.
 #
-# Do NOT add &uart-flow-control here. Tried 2026-09-17 against the "no
-# response from RCP" dropouts; it made them worse - agent lifetime fell from
-# 3h12m/~10h to 18min/10min - which fits RTS/CTS not being wired through this
-# dongle's CH9102 bridge, so the host stalls waiting on a CTS that never
-# asserts. Reverted the same day.
-Exec=--radio-url spinel+hdlc+uart:///dev/ttyOTBR?uart-baudrate=460800 -B enp3s0 --debug-level 5
+# Flow control is per-dongle, NOT a general setting: on the old Sonoff
+# ZBDongle-E (firmware variant "no_flow", RTS/CTS not wired) enabling it made
+# the "no response from RCP" dropouts much worse.
+# --debug-level defaults to 7, which buried the journal during the first OTBR
+# attempt; 5 is notice.
+Exec=--radio-url spinel+hdlc+uart:///dev/ttyOTBR?uart-baudrate=460800&uart-flow-control -B enp3s0 --debug-level 5
 
 # The image has no wget/curl. Check that otbr-agent answers, not its Thread
 # role: the agent is legitimately "disabled" until a dataset is formed.

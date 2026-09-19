@@ -3,8 +3,8 @@
 Home Assistant running on **Podman Quadlets** on `henrybook` (bare metal —
 MicroK8s was decommissioned 2026-08-06). Recorder DB is SQLite. Matter runs
 on-host via `matter-server.container`. Thread is served by a Home Assistant
-OTBR on this box (`otbr.container`, deployed 2026-09-15), with the Sonoff
-dongle (OpenThread RCP) as the Thread radio. No Zigbee radio.
+OTBR on this box (`otbr.container`, deployed 2026-09-15), with a Connect ZBT-1
+(OpenThread RCP) as the Thread radio. No Zigbee radio.
 
 > **Live deployment:** **[docs/podman-deploy.md](docs/podman-deploy.md)**. Start there.
 > **[docs/MIGRATION.md](docs/MIGRATION.md)** is kept as the historical record of the
@@ -94,9 +94,9 @@ This is **not** how the server runs anything. Do not deploy from it.
   `/var/lib/smart-home-and-hearth/` on a 16 GB flash module with ~12 GiB usable.
   Ask before changing any retention setting or moving anything to the HDD — see
   [CLAUDE.md](CLAUDE.md).
-- **The Sonoff dongle is the Thread radio** (OpenThread RCP) for the
-  Home Assistant OTBR, despite "Zigbee" in its USB name. Keep it on a USB 2.0
-  port with an extension cable: USB 3.0 controllers emit 2.4 GHz noise that
-  degrades Thread badly.
+- **The Connect ZBT-1 is the Thread radio** (OpenThread RCP) for the
+  Home Assistant OTBR. Keep it on a USB 2.0 port with an extension cable: USB
+  3.0 controllers emit 2.4 GHz noise that degrades Thread badly. Radios do die
+  — the previous dongle failed after three days (docs/hardware.md § Radios).
 - **Disk exhaustion is the most likely failure mode.** The root-filesystem alert
   is the most valuable thing in the monitoring stack.

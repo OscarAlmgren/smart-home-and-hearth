@@ -26,15 +26,16 @@ cost/retention or data-safety implications beyond just free space):
 These are load-bearing. Changing them breaks the deployment in ways that are
 slow to diagnose.
 
-- **Serial devices are referenced by `/dev/serial/by-id/`, never `/dev/ttyACM0`.**
+- **Serial devices are referenced by `/dev/serial/by-id/`, never `/dev/ttyUSB0`.**
   Kernel enumeration order changes across reboots and will silently point a
-  radio container at the wrong device. Applies to the Sonoff Thread dongle
-  (`usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00`)
-  when it is passed to `podman/otbr.container`.
-- **The Sonoff dongle is the Thread radio, not a Zigbee coordinator.** It runs
-  OpenThread RCP firmware for the Home Assistant OTBR, despite
-  "Zigbee" in its USB name. Don't re-flash it to Zigbee and don't pass it to
-  the Home Assistant container. See § Current: Matter/Thread.
+  radio container at the wrong device. Applies to the Connect ZBT-1 Thread radio
+  (`usb-Nabu_Casa_SkyConnect_v1.0_…-if00-port0`) when it is passed to
+  `podman/otbr.container`.
+- **The Thread radio is a Connect ZBT-1 (SkyConnect), not a Zigbee coordinator.**
+  It runs OpenThread RCP firmware for the Home Assistant OTBR. Don't re-flash it
+  to Zigbee and don't pass it to the Home Assistant container. Baud rate and
+  hardware flow control are properties of the flashed firmware — check its GBL
+  metadata before changing them. See § Current: Matter/Thread.
 - **No CPU limit on the Home Assistant container.** The node has 2 slow cores;
   CFS throttling makes the UI unusable. Memory limits only.
 - **`config/secrets.yaml` and `.env.prod.secret` are plain gitignored files,
@@ -94,8 +95,10 @@ Do not add these without being asked — they are scoped to later phases:
 integration (HAOS-only add-on otherwise).
 
 **Thread: a Home Assistant OTBR on this box — deployed 2026-09-15.**
-`podman/otbr.container` uses the Sonoff dongle (OpenThread RCP) as its Thread
-radio, and HA manages it through the Open Thread Border Router integration
+`podman/otbr.container` uses a Connect ZBT-1 (OpenThread RCP) as its Thread
+radio — it replaced a Sonoff ZBDongle-E whose radio failed 2026-09-19, see
+docs/hardware.md § Radios for the swap procedure — and HA manages it through
+the Open Thread Border Router integration
 (`http://127.0.0.1:8081`). Its network, `ha-thread-a999` (channel 20), is HA's
 preferred Thread dataset. Existing Matter-over-Thread devices are being
 re-commissioned onto it; until the last one moves, some are still reached

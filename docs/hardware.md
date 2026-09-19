@@ -12,6 +12,7 @@ The server is `henrybook`, an **HP t610 WW thin client** (B8C95AA#ABD). Full
 | Storage | **16 GB SATA flash**, largest partition ~12 GiB | The binding constraint. See below. |
 | SATA | SB7x0/SB8x0/SB9x0 controller in **IDE mode** | No AHCI, no NCQ. The incoming HDD will be slow — fine for backups and the DB, keep hot paths on flash. |
 | Network | 1× Broadcom BCM57781 gigabit (`enp3s0`) | No WiFi. |
+| Thread radio | HA Connect ZBT-1 / SkyConnect (EFR32MG21, CP2102N bridge `10c4:ea60`) on USB port 2-3, replacing a failed Sonoff ZBDongle-E 2026-09-19 | OpenThread RCP firmware; driven by `podman/otbr.container`. See § Radios. |
 | Bluetooth | Realtek RTL8761BU USB dongle (`0bda:a760`, BT 5.x; sold as "Bluetooth 6.0"), added 2026-09-15 | Host runs `bluez` + `bluetooth.service`; HA reaches it via `/run/dbus` mounted into the container. USB autosuspend must stay off (`/etc/udev/rules.d/50-rtl8761bu-no-autosuspend.rules`) or it times out and resets on the OHCI controller. |
 | USB | OHCI + EHCI (USB 2.0), TUSB73x0 xHCI (USB 3.0) | Enough ports. Placement matters — see below. |
 
@@ -64,25 +65,39 @@ continuously. Mitigations already in the config:
 
 ## Radios
 
-### Thread/Matter — Home Assistant OTBR, Sonoff dongle as the Thread radio
+### Thread/Matter — Home Assistant OTBR, Connect ZBT-1 as the Thread radio
 
 Thread is owned by an **on-host OpenThread Border Router** that Home Assistant
-manages. The Sonoff Zigbee 3.0 USB Dongle Plus V2 (ZBDongle-E, EFR32MG21) runs
-**OpenThread RCP firmware** (`SL-OPENTHREAD/2.5.3.0`, 460800 baud) and is that
+manages. A **Home Assistant Connect ZBT-1** (sold as SkyConnect; EFR32MG21 on a
+Silabs CP2102N bridge, `10c4:ea60`) runs **OpenThread RCP firmware** and is that
 border router's radio. HA runs as a container here, not HAOS, so there is no
 OTBR add-on. Instead `podman/otbr.container` drives the dongle, and HA connects
 to it through its **Open Thread Border Router** integration
 (`http://127.0.0.1:8081`).
 
-**Status (2026-09-15): deployed.**
+**Status (2026-09-19): deployed.** Radio replaced the same day — see § The
+Sonoff dongle failed below.
 
 | | |
 |---|---|
 | Network name | `ha-thread-a999` (HA's preferred Thread network) |
 | Channel | 20 — quietest of 15/20/25 in an energy scan at the VARDAGSRUM spot (≈ −80 dBm; 11–14 read −33…−45, 16–18 −58…−62) |
 | PAN ID / ext PAN ID | `0xa999` / `65cb0d082358c46f` |
+| Radio firmware | `skyconnect_openthread_rcp` 2.7.2.0 (Nabu Casa release `v2026.02.23` — newest **stable**; 3.1.1.0 exists only as beta), 460800 baud **with** hardware flow control |
 | Image | `openthread/otbr@sha256:51a54d9f…` (built 2026-09-14), `--debug-level 5` |
 | Dataset | `/var/lib/smart-home-and-hearth/otbr`, backed up by `scripts/backup.sh`; HA also stores it in `.storage/thread.datasets` |
+
+**Swapping the radio** does not lose the network, but it is not purely
+plug-and-play. OpenThread's settings file is keyed to the *radio's* extended
+address, so a new dongle comes up with `state: disabled` and no dataset. Restore
+it from HA's own copy (`.storage/thread.datasets`, the `preferred_dataset` id)
+with `ot-ctl dataset set active <tlv>`, then `ifconfig up` and `thread start` as
+**separate** `ot-ctl` invocations — piping all three into one session silently
+runs only the first. Then point HA at the new radio's border agent
+(`thread/set_preferred_border_agent`, since the dataset still records the old
+one) and update the by-id path, the two device units and the baud/flow-control
+settings in `podman/otbr.container`. Devices re-register via SRP by themselves;
+all ten were back within four minutes, with no re-commissioning.
 
 Thread devices are being re-commissioned onto this network one at a time. The
 old `NEST-PAN-0057` dataset stays in HA (not preferred) until the last device
@@ -117,12 +132,11 @@ network that HA controls and a local Thread path.
   tailing `/var/log/syslog`, so systemd sees a healthy unit and
   `Restart=on-failure` never fires. Timings are loose (60s/30s, 5 retries)
   because `ot-ctl` answers slowly while the agent is commissioning.
-- **The RCP drops out.** `radio tx timeout` → "no response from RCP" killed
-  the agent 14 times over 2026-09-16/17, clustered around commissioning the
-  five KAJPLATS E14 bulbs. USB autosuspend is not the cause (`power/control`
-  is `on`). Suspects: UART framing at 460800 without hardware flow control
-  under burst load, the 1.5 m extension, or the RCP firmware itself. A
-  restart recovers it and the mesh reattaches within a minute.
+- **Baud rate and hardware flow control are per-dongle, not global.** Read the
+  firmware's own GBL metadata (`universal-silabs-flasher dump-gbl-metadata`):
+  the ZBT-1 build reports 460800 with no `no_flow` variant, so flow control is
+  on; the Sonoff's build was explicitly `no_flow`, and forcing flow control
+  there made its dropouts dramatically worse.
 - The REST API (unauthenticated; can read or replace the network key) and the
   web GUI stay off the LAN: REST on loopback, web GUI disabled.
 - The first attempt's dataset (`HenrybookThread`, PAN `0xb017`, no devices)
@@ -135,29 +149,43 @@ reaches Thread devices through the on-host OTBR, or through another border
 router whose routes the host learns from router advertisements, and needs no
 radio of its own.
 
+### The Sonoff dongle failed (2026-09-17)
+
+The original radio — a Sonoff ZBDongle-E on OpenThread RCP 2.5.3.0 — died
+progressively: stable for ~10 h, then dropping every 18 min, then 2 min, then
+20 s, with `radio tx timeout` → "no response from RCP" ten times in one day.
+Every software explanation was eliminated by test: hardware flow control (made
+it worse), USB autosuspend (`power/control` was already `on`), the 1.5 m
+extension cable (died in 30 s plugged directly into a port), OTA/commissioning
+load (dropped when idle too), and firmware version (already the newest build).
+A **reflash of the identical firmware died 18 s after start**, which is what
+condemned the hardware. Replaced with the used Connect ZBT-1 above.
+
+Keep this in mind when a radio starts misbehaving: the useful signal was the
+*trend* in how long the agent survived, not any single failure.
+
 **Dongle placement.** Plug it into a USB 2.0 port, on an extension cable.
 USB 3.0 controllers and their cabling emit broadband noise across 2.4 GHz,
 where Thread lives. The extension also gets the antenna away from the chassis,
 the Ethernet port and the Bluetooth dongle (also 2.4 GHz, on the neighbouring
-port). As of 2026-09-15 henrybook is in the VARDAGSRUM media unit (west wall,
-by the staircase); the dongle is on USB port 2-3 (OHCI, 12 Mbit), on a 1.5 m
-extension, taped high up on the outside of an AC unit. Keep it vertical,
-~1.5–2 m high, facing into the room toward MATSAL/KÖK, and ≥1–1.5 m from the
-TV/AVR, the chassis and the Bluetooth dongle. If the first re-commissioned
-router shows neighbour RSSI worse than −70 dBm, move it off the AC unit (metal
-and inverter electronics) along the extension.
+port). As of 2026-09-19 henrybook is in the VARDAGSRUM media unit (west wall,
+by the staircase) and the ZBT-1 is on USB port 2-3 (OHCI, 12 Mbit) on the
+extension cable that ships with it. Keep it vertical, ~1.5–2 m high, facing
+into the room toward MATSAL/KÖK, and ≥1–1.5 m from the TV/AVR, the chassis and
+the Bluetooth dongle. First neighbour readings after the swap were −71…−75 dBm,
+worse than the −53…−78 the old spot gave, so the antenna is worth repositioning
+higher and further into the room.
 
-Reference it by stable path, never `/dev/ttyACM0`:
+Reference it by stable path, never `/dev/ttyUSB0`:
 
 ```bash
 ls -l /dev/serial/by-id/
-# usb-ITEAD_SONOFF_Zigbee_3.0_USB_Dongle_Plus_V2_20240124154748-if00
-# (this dongle's path ends -if00 — no -port0 suffix)
+# usb-Nabu_Casa_SkyConnect_v1.0_ba5a55b0af14ed118fc4b48be054580b-if00-port0
+# (the CP2102N bridge adds a -port0 suffix; the old Sonoff's path ended -if00)
 ```
 
-The USB product name says "Zigbee" whatever firmware is flashed. Kernel
-enumeration order changes across reboots, so `/dev/ttyACM0` will eventually
-point at the wrong radio.
+Kernel enumeration order changes across reboots, so `/dev/ttyUSB0` will
+eventually point at the wrong device.
 
 ### Zigbee — no radio
 
@@ -169,7 +197,7 @@ and Zigbee would need a second dongle of its own.
 | Item | Purpose | Status |
 |---|---|---|
 | Larger HDD | Container images, recorder DB, restic repo | ☑ fitted 2026-08-25 — rootful + rootless podman stores and `/var/lib/smart-home-and-hearth` moved onto it, restic repo still pending (see disaster-recovery.md § Where backups go) |
-| Home Assistant OTBR | On-host Thread Border Router: `podman/otbr.container` + HA's Open Thread Border Router integration, Sonoff dongle (OpenThread RCP) as the radio | ☑ deployed 2026-09-15 — network `ha-thread-a999`, channel 20, preferred in HA |
+| Home Assistant OTBR | On-host Thread Border Router: `podman/otbr.container` + HA's Open Thread Border Router integration, Connect ZBT-1 (OpenThread RCP) as the radio | ☑ deployed 2026-09-15 — network `ha-thread-a999`, channel 20, preferred in HA; radio swapped 2026-09-19 after the Sonoff failed |
 | Raspberry Pi + MinIO | S3 backup target on the LAN | ☐ phase 1 backup target |
 
 MinIO on the LAN is **not offsite** — a fire, theft or power event takes both
