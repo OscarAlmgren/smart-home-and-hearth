@@ -1,0 +1,18 @@
+# Auto-start otbr.service when the Thread dongle appears.
+#
+# otbr.container has BindsTo= on the dongle's .device unit, so unplugging the
+# dongle stops the border router cleanly instead of leaving it crash-looping
+# against a missing radio. But BindsTo= only propagates *stop*: on 2026-09-20 a
+# cable swap stopped the unit at 07:41 and nothing started it again when the
+# dongle came back 60 s later, so every Thread device stayed unavailable until
+# someone noticed. This rule closes that gap - udev pulls the unit back in as
+# soon as the device node reappears.
+#
+# Matched on the parent USB device's sysfs attributes rather than ID_SERIAL_SHORT:
+# that property is not set yet while these rules run on this udev version (only
+# ID_USB_SERIAL_SHORT is), whereas ATTRS{} walks up to the USB device and is
+# stable. The serial means this survives port changes and ttyUSB* renumbering.
+# Replace the serial when the radio is swapped, alongside the paths in
+# podman/otbr.container. Installed by scripts/bootstrap-podman.sh into
+# /etc/udev/rules.d/.
+ACTION=="add|change", SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="ba5a55b0af14ed118fc4b48be054580b", TAG+="systemd", ENV{SYSTEMD_WANTS}+="otbr.service"

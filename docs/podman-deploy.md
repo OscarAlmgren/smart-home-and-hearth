@@ -61,6 +61,17 @@ reality disagreed:
   a NAT44 setup step via legacy `iptables` and `die`s outright if these
   aren't loaded ("Table does not exist (do you need to insmod?)").
   `/etc/modules-load.d/otbr-nat-modules.conf` loads them at boot.
+- **A udev rule that restarts `otbr.service` when the dongle re-appears**
+  (`/etc/udev/rules.d/60-otbr-thread-dongle.rules`). `otbr.container` uses
+  `BindsTo=` on the dongle's `.device` unit so an unplug stops the border router
+  cleanly rather than crash-looping it against a missing radio — but `BindsTo=`
+  only propagates *stop*. Without this rule a knocked-out USB cable takes Thread
+  down permanently: on 2026-09-20 a cable swap stopped the unit and nothing
+  brought it back when the dongle returned a minute later. The rule matches the
+  dongle's USB serial via `ATTRS{}` (not `ID_SERIAL_SHORT`, which isn't set yet
+  when these rules run) and sets `SYSTEMD_WANTS=otbr.service`. Verify with
+  `systemctl stop otbr.service && sudo udevadm trigger --action=add --sysname-match=ttyUSB0`
+  — the unit should come back within ~10 s.
 - **`accept-ra: true` for `enp3s0` in `/etc/netplan/`** (renders
   `IPv6AcceptRA=yes`). With IPv6 forwarding on, systemd-networkd otherwise
   stops accepting router advertisements, and the host slowly loses its SLAAC

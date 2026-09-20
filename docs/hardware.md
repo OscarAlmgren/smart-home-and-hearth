@@ -125,7 +125,11 @@ network that HA controls and a local Thread path.
   empty tmpfs.
 - `BindsTo=`/`ConditionPathExists=` on the dongle's by-id path, so a missing
   dongle stops or skips the unit instead of crash-looping (see the 2026-08-25
-  incident in disaster-recovery.md).
+  incident in disaster-recovery.md). **`BindsTo=` only propagates stop**, so a
+  udev rule (`podman/host-config/60-otbr-thread-dongle.rules`) starts the unit
+  again when the dongle re-appears — without it, an unplugged cable takes Thread
+  down until a human notices. This matters here: the dongle hangs off an
+  extension cable within reach of children.
 - The image has no `wget`/`curl`, so the health check is `ot-ctl state` with
   `HealthOnFailure=kill`. It is **the only thing that recovers a dead agent**:
   when otbr-agent exits, the container stays up because the entrypoint keeps

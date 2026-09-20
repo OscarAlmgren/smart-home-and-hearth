@@ -65,6 +65,11 @@ sudo cp podman/host-config/99-otbr-forwarding.conf /etc/sysctl.d/
 sudo sysctl --load=/etc/sysctl.d/99-otbr-forwarding.conf >/dev/null
 sudo cp podman/host-config/otbr-nat-modules.conf /etc/modules-load.d/
 sudo modprobe -a iptable_nat iptable_mangle iptable_filter ip6table_filter
+# Restarts otbr.service when the dongle is re-plugged; otbr.container's
+# BindsTo= only propagates stop, so without this a knocked-out cable leaves
+# Thread down until someone notices.
+sudo cp podman/host-config/60-otbr-thread-dongle.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
 
 # ── Quadlets and plain units ─────────────────────────────────────────────────
 say "Installing Quadlet units"
