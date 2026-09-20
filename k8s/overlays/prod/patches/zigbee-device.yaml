@@ -1,5 +1,13 @@
 # Attaches the real Zigbee coordinator.
 #
+# ─────────────────────────────────────────────────────────────────────────────
+# CURRENTLY DISABLED. This file is not referenced — `patches:` in
+# ../kustomization.yaml is empty while the dongle is not yet fitted. See the
+# PHASE 0 block there for how to turn it on.
+#
+# Editing this file alone changes nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+#
 # Strategic merge, so `volumes` merges on the `name` key rather than by list
 # index — reordering volumes in the base cannot silently repoint this at the
 # wrong thing.

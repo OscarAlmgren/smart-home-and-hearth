@@ -1,0 +1,18 @@
+# Plain systemd unit, not a Quadlet — install into /etc/systemd/system/,
+# alongside ha-sync-config.service (see docs/podman-deploy.md).
+#
+# 03:15 local time — evaluated against the host's own timezone, which is
+# already Europe/Stockholm on henrybook (confirm with `timedatectl`). Offset
+# from the hour so it does not collide with Home Assistant's own nightly
+# recorder purge.
+[Unit]
+Description=Nightly Home Assistant backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+# If the box was off at 03:15, run on next boot rather than skipping the day
+# entirely — same intent as the k8s CronJob's startingDeadlineSeconds: 7200.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

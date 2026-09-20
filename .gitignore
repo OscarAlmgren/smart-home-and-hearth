@@ -1,5 +1,6 @@
 # Secrets — never commit
 config/secrets.yaml
+.env.*.secret
 
 # Home Assistant runtime state (regenerated automatically, don't version)
 config/.storage/

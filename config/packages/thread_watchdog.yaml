@@ -1,0 +1,76 @@
+# Watchdog for the on-host Thread border router (podman/otbr.container).
+#
+# Why this exists: when the border router is down, every Matter-over-Thread
+# device simply goes "unavailable" and nothing else complains. On 2026-09-20 a
+# USB cable was knocked out; systemd stopped otbr.service cleanly and Thread
+# stayed down unnoticed. A udev rule now restarts the unit when the dongle
+# reappears (podman/host-config/60-otbr-thread-dongle.rules), but a dongle that
+# is unplugged and NOT put back still needs a human, so it needs to be visible.
+#
+# Health signal: otbr-agent's own REST API. Home Assistant is host-networked, so
+# it can reach the loopback address the API is bound to. The endpoint returns a
+# JSON string like "router", "leader", "child", "detached" or "disabled"; if the
+# container is down the request fails and the sensor goes unavailable.
+sensor:
+  - platform: rest
+    name: Thread border router state
+    unique_id: thread_border_router_state
+    resource: http://127.0.0.1:8081/node/state
+    value_template: "{{ value_json }}"
+    scan_interval: 60
+    timeout: 10
+
+template:
+  - binary_sensor:
+      - name: Thread border router down
+        unique_id: thread_border_router_down
+        device_class: problem
+        # "detached" and "disabled" mean the agent is alive but not on the mesh,
+        # which is just as broken from a device's point of view as no agent.
+        state: >
+          {{ states('sensor.thread_border_router_state')
+             not in ['leader', 'router', 'child'] }}
+        # Ride out restarts: the unit recovers from an RCP drop in ~90 s and
+        # rejoins the mesh a minute later, so anything shorter than this would
+        # cry wolf on a self-healed blip.
+        delay_on:
+          minutes: 10
+        delay_off:
+          seconds: 30
+
+# Escalating-then-backing-off notifications, so a real outage is noticed
+# quickly but a month away from home does not mean a month of daily pings:
+# 30 min, 2 h, 12 h, 24 h, then weekly for as long as it stays down. One
+# acknowledgement from the notification silences it until it recovers and
+# breaks again.
+alert:
+  thread_border_router:
+    name: Thread border router is down
+    entity_id: binary_sensor.thread_border_router_down
+    state: "on"
+    repeat:
+      - 30
+      - 120
+      - 720
+      - 1440
+      - 10080
+    can_acknowledge: true
+    skip_first: false
+    # One title field serves both the alert and the recovery message, so it has
+    # to be a template - otherwise the all-clear arrives titled "down", which is
+    # exactly as confusing as it sounds.
+    title: >-
+      {{ 'Thread DOWN - henrybook border router'
+         if is_state('binary_sensor.thread_border_router_down', 'on')
+         else 'Thread RECOVERED - henrybook border router' }}
+    message: >-
+      No Thread border router for 10+ minutes. Every Matter-over-Thread device
+      (chandelier, GRILLPLATS plug, BILRESA buttons) is unavailable. Most likely
+      the ZBT-1 USB dongle has been unplugged.
+    done_message: >-
+      Border router is back and on the mesh as
+      {{ states('sensor.thread_border_router_state') }}. Thread devices should
+      reappear within a minute or two.
+    notifiers:
+      - mobile_app_pixel_8
+      - persistent_notification

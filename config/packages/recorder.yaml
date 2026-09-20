@@ -1,14 +1,14 @@
 # Recorder — history database.
 #
-# `default_config:` would otherwise give us SQLite at /config/home-assistant_v2.db
-# with a 10-day purge. We override it to point at the in-cluster Postgres, for
-# two reasons:
+# SQLite, at /config/home-assistant_v2.db (part of the ha-config bind mount,
+# not a restart-prone hostPath PVC — see docs/MIGRATION.md § Decisions for
+# the history of this call). We still override `default_config:`'s defaults
+# below for flash-wear and purge-window reasons, same as before.
 #
-#   1. SQLite on a hostpath PVC is fragile under pod restarts.
-#   2. Choosing Postgres now, while there is no data, means never having to run
-#      a database migration later.
-#
-# See docs/MIGRATION.md § Decisions.
+# Never copy/sync this file while Home Assistant is running — it's a live
+# WAL-mode SQLite database, and a filesystem copy mid-write is torn and
+# unrestorable. scripts/backup.sh takes a consistent snapshot via SQLite's
+# VACUUM INTO instead.
 
 recorder:
   db_url: !secret recorder_db_url
@@ -23,14 +23,14 @@ recorder:
   commit_interval: 30
 
   # 7 days while we are on the flash module. RAISE THIS TO 90 once the HDD is
-  # fitted and Postgres data has moved onto it — but check with Oscar first,
+  # fitted and the recorder DB has moved onto it — but check with Oscar first,
   # per CLAUDE.md.
   purge_keep_days: 7
   auto_purge: true
 
-  # Repack reclaims disk after a purge. Important here: without it, Postgres
-  # holds onto dead tuples and the 500 Mi PVC fills even though rows were
-  # deleted.
+  # Repack reclaims disk after a purge (SQLite's VACUUM). Important here:
+  # without it, deleted rows leave the file's on-disk size unchanged and the
+  # flash module fills even though history was purged.
   auto_repack: true
 
   exclude:
@@ -52,5 +52,5 @@ recorder:
 # Long-term statistics (the `statistics` tables) are NOT affected by
 # purge_keep_days — HA keeps 5-minute and hourly aggregates for sensors with a
 # state_class indefinitely. That is what makes the Energy dashboard work on a
-# 7-day purge, and it is why Postgres remains the long-term store even though
-# Grafana Cloud's free tier only retains 14 days.
+# 7-day purge, and it is why the recorder DB remains the long-term store even
+# though Grafana Cloud's free tier only retains 14 days.
