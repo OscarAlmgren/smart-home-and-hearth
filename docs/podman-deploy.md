@@ -144,6 +144,27 @@ cd /home/oscaralmgren/smart-home-and-hearth
 Follow the printed next steps (secrets, enabling the
 units). Full sequence is in `scripts/bootstrap-podman.sh`'s own output.
 
+## Deploying a config change
+
+`config/` is git-managed but Home Assistant reads
+`/var/lib/smart-home-and-hearth/ha-config`. `ha-sync-config.service` copies one
+to the other — and it is a `oneshot` with `RemainAfterExit=yes`, so **restarting
+`homeassistant.service` does not re-run it**: systemd sees the dependency as
+already satisfied and Home Assistant restarts against the old files. Restarting
+the sync unit instead stops Home Assistant with it (`Requires=`), and does not
+bring it back. So:
+
+```bash
+git pull
+sudo systemctl restart ha-sync-config.service   # re-syncs; stops HA as a dependent
+sudo systemctl start homeassistant.service      # start it again
+sudo podman exec homeassistant python -m homeassistant --script check_config -c /config
+```
+
+Check the runtime copy really changed (`grep` the file under
+`/var/lib/smart-home-and-hearth/ha-config/packages/`) before concluding a config
+edit had no effect.
+
 ## Verification
 
 ```bash
