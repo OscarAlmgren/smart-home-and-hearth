@@ -45,6 +45,30 @@ Phase 1 is **LAN-only**. No Ingress, no cert-manager, no public exposure.
 | HA workload | **Deployment, `strategy: Recreate`** | RollingUpdate deadlocks — two pods cannot both bind host `:8123` or open the same serial device. |
 | Radios | Zigbee in phase 1, Thread in phase 2 | Bluetooth dropped: no adapter present, and host D-Bus in a pod is the most fragile piece. |
 
+**Superseded after the Podman cutover** (this table otherwise reflects the
+MicroK8s-era plan and is kept as history — see docs/podman-deploy.md for what
+actually shipped):
+
+- **Recorder DB → SQLite.** The Postgres decision above assumed a
+  restart-prone hostPath PVC; under Podman, `/config` is a stable bind mount,
+  so that fragility argument no longer applies. Still no live data at the
+  time of the switch, so the same "decide once, no migration" logic applied
+  in reverse. Frees the RAM/service overhead of a dedicated DB container for
+  the OTBR/matter-server containers added at the same time.
+- **Radios → Thread/Matter first, Zigbee deferred.** The single Sonoff
+  dongle was reflashed to OpenThread RCP firmware instead of buying a second
+  one for Thread as originally planned; Zigbee now waits on a dongle of its
+  own. See docs/hardware.md § Radios.
+- **On-host OTBR decommissioned 2026-08-28.** The containerized OpenThread
+  Border Router ran only 2026-08-25 → 2026-08-28. Thread now runs on the
+  household's Google/Nest Wifi Thread Border Router, discovered by Home
+  Assistant over mDNS.
+- **Reversed 2026-09-15: Home Assistant OTBR planned again.** The 2019 Nest
+  Wifi units each run a separate Thread network that can't be merged, and
+  Thread router devices kept dropping out of HA. The Sonoff dongle stays on
+  OpenThread RCP as the radio for an on-host OTBR managed from HA; Zigbee
+  stays without a radio. See docs/hardware.md § Radios.
+
 ---
 
 ## Step 1 — Repo hygiene and hardware truth
@@ -172,13 +196,29 @@ Nightly restic `CronJob`, in order of criticality:
 
 Blocked on phase 0 hardware. Everything above is pure git and needs no server.
 
+### 9a — Platform, no radio required
+
+The Zigbee patch is disabled (see the PHASE 0 block in
+`k8s/overlays/prod/kustomization.yaml`), so all of this can be done before the
+dongle is fitted. Answer "is the platform working" before introducing "is the
+radio working" — then a failure points at one or the other, not both.
+
 - [ ] MicroK8s installed; `hostpath-storage` + `dns` enabled, `ingress` **not**
 - [ ] Sealed Secrets controller; real secrets sealed and committed
+- [ ] Argo CD repo credential added (deploy key)
 - [ ] Argo CD core installed, both Applications registered
-- [ ] First sync of `ha-prod`
-- [ ] Zigbee dongle paired, ZHA coordinator online
+- [ ] First sync of `ha-prod`; Home Assistant answers on `:8123`
+- [ ] Recorder confirmed on Postgres — **no `home-assistant_v2.db` in `/config`**
 - [ ] Grafana Cloud stack created, first metrics flowing
 - [ ] **Restore drill executed successfully**
+
+### 9b — Radio, once the dongle is fitted
+
+- [ ] Dongle in a **USB 2.0** port on an extension cable
+- [ ] Real `/dev/serial/by-id/` path in `patches/zigbee-device.yaml`
+- [ ] Zigbee patch re-enabled in `k8s/overlays/prod/kustomization.yaml`
+- [ ] ZHA added in the UI, coordinator online
+- [ ] First device paired
 
 ---
 

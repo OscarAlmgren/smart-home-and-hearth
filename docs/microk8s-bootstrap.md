@@ -90,21 +90,7 @@ Sealed Secrets needs the sealing key, restoring the sealing key needs the
 backup, and reading the backup needs that password — if it only exists in the
 cluster, losing the cluster makes every backup unreadable.
 
-### 3. Set the Zigbee device path
-
-```bash
-ls -l /dev/serial/by-id/
-```
-
-Put the full `usb-ITEAD_SONOFF_...-if00-port0` path into
-`k8s/overlays/prod/patches/zigbee-device.yaml`, commit, push.
-
-**Never `/dev/ttyACM0`.** That name is assigned in kernel enumeration order, so
-once the Thread dongle arrives in phase 2 the two radios can swap after a
-reboot and ZHA will silently attach to the wrong one. CI rejects `/dev/tty*`
-paths for this reason.
-
-### 4. Register the applications
+### 3. Register the applications
 
 ```bash
 microk8s kubectl apply -f argocd/project.yaml
@@ -112,6 +98,27 @@ microk8s kubectl apply -f argocd/applications/
 ```
 
 `ha-prod` auto-syncs. `ha-test` is manual by design — see [lcm.md](lcm.md).
+
+## You do not need the Zigbee dongle yet
+
+Phase 0 deliberately brings the platform up **without a radio**. The Zigbee
+patch is disabled in `k8s/overlays/prod/kustomization.yaml`, so the volume stays
+at `/dev/null` with an unvalidated hostPath type — it mounts cleanly and Home
+Assistant starts normally, simply with no radio attached.
+
+This separates two independent questions. Get "is the platform working"
+answered — cluster, storage, database, GitOps, backups, monitoring — before
+introducing "is the radio working". When something breaks, you then know which
+of the two it was.
+
+Add the dongle later by following the **PHASE 0** block in
+`k8s/overlays/prod/kustomization.yaml`. CI refuses to build if the patch is
+enabled while the placeholder path is still in it, so this cannot be half-done.
+
+**Never use `/dev/ttyACM0`.** That name is assigned in kernel enumeration order,
+so once the Thread dongle arrives in phase 2 the two radios can swap after a
+reboot and ZHA will silently attach to the wrong one. CI rejects `/dev/tty*`
+paths for this reason.
 
 ## Verifying
 
@@ -129,9 +136,6 @@ several minutes on this CPU while it installs integration dependencies — the
 `startupProbe` allows up to 10 minutes before giving up.
 
 ```bash
-# Is the dongle visible inside the pod?
-microk8s kubectl -n ha-prod exec deploy/homeassistant -- ls -l /dev/zigbee
-
 # Is the recorder on Postgres rather than SQLite?
 microk8s kubectl -n ha-prod exec sts/postgres -- \
   psql -U ha -d homeassistant -c '\dt'
@@ -142,6 +146,13 @@ microk8s kubectl -n ha-prod exec deploy/homeassistant -- \
 That last check matters: if Home Assistant cannot reach Postgres it falls back
 to SQLite and carries on looking healthy, and you find out months later when
 the disk fills.
+
+Once the dongle is fitted and the patch enabled, this should show a character
+device rather than `/dev/null`:
+
+```bash
+microk8s kubectl -n ha-prod exec deploy/homeassistant -- ls -l /dev/zigbee
+```
 
 ### Then run the restore drill
 

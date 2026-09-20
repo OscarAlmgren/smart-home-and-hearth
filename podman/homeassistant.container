@@ -1,0 +1,86 @@
+# Port of k8s/base/homeassistant/deployment.yaml. See that file's history and
+# docs/hardware.md for why these choices exist — carried over unchanged:
+#
+#   - host networking: mDNS/SSDP/DHCP discovery (Chromecast, Sonos, HomeKit)
+#     need broadcast/multicast traffic a bridge-networked container never sees
+#   - privileged: ZHA's USB/Bluetooth discovery walks sysfs paths a targeted
+#     capability set does not expose
+#   - no CPU limit: 2 slow cores: CFS throttling makes the UI unusable
+#
+# Install: symlink or copy into /etc/containers/systemd/. systemd-generator
+# turns this into homeassistant.service on the next `systemctl daemon-reload`.
+# See docs/podman-deploy.md.
+[Unit]
+Description=Home Assistant
+After=network-online.target ha-sync-config.service
+Wants=network-online.target
+Requires=ha-sync-config.service
+
+# StartLimitIntervalSec/StartLimitBurst only take effect in [Unit] — systemd
+# silently ignores them in [Service] ("Unknown key ... ignoring"), which is
+# where they used to live here. Without them actually applying,
+# Restart=on-failure had no real cap: a broken unit restarts indefinitely,
+# filling the journal/disk over a long outage (see the Aug 25 incident notes
+# in docs/disaster-recovery.md). Burst is set above systemd's default of 5
+# because a legitimate cold start (image pull + Python dependency install on
+# henrybook's hardware) can itself take several minutes and shouldn't be
+# mistaken for crash-looping.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Container]
+# HA_VERSION must match .env.prod — scripts/deploy.sh checks this before
+# restarting the unit, same drift check render-env.sh did for the k8s overlay.
+Image=ghcr.io/home-assistant/home-assistant:2026.7.4
+ContainerName=homeassistant
+
+Network=host
+# With host networking the container would otherwise inherit the host's
+# resolver as-is, which is fine here — there is no cluster DNS to lose
+# anymore. (Unlike the k8s version, no dnsPolicy workaround needed.)
+
+Environment=TZ=Europe/Stockholm
+
+Volume=/var/lib/smart-home-and-hearth/ha-config:/config
+# Home Assistant reads /etc/localtime in addition to TZ.
+Volume=/etc/localtime:/etc/localtime:ro
+# Bluetooth: HA drives the host adapter through the host's BlueZ daemon
+# over the system D-Bus socket (--privileged alone is not enough; HA does
+# not run its own bluetoothd). Needs bluez installed and bluetooth.service
+# enabled on the host.
+Volume=/run/dbus:/run/dbus:ro
+
+# No serial radio is passed to Home Assistant. The Connect ZBT-1
+# (/dev/serial/by-id/usb-Nabu_Casa_SkyConnect_v1.0_…-if00-port0) runs
+# OpenThread RCP firmware and is the Thread radio for otbr.container, which HA
+# talks to through its Open Thread Border Router integration — never
+# AddDevice= it here. Zigbee/ZHA has no radio and would need a second dongle.
+# See docs/hardware.md § Radios.
+
+# Privileged + host network together are what --memory needs PodmanArgs for;
+# neither has a first-class Quadlet key.
+PodmanArgs=--privileged --memory=1536m
+
+# Home Assistant's first boot installs Python dependencies for every
+# discovered integration — on this CPU that can take several minutes.
+# HealthStartPeriod defers failure counting until after it, so a slow first
+# boot cannot get killed mid-install the way a naive healthcheck would.
+HealthCmd=wget --quiet --tries=1 --spider http://localhost:8123/ || exit 1
+HealthStartPeriod=600s
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=5
+# Podman does not restart on health failure by default — this is what makes
+# the liveness check actually do something, matching k8s's livenessProbe.
+HealthOnFailure=restart
+
+[Service]
+Restart=on-failure
+RestartSec=10
+# Home Assistant flushes the recorder and unloads integrations on shutdown —
+# on this CPU that is not instant, and SIGKILLing it mid-write is how
+# databases get corrupted.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target default.target
