@@ -38,8 +38,17 @@ RESTIC_IMAGE="docker.io/restic/restic:0.17.3"
 if [[ -z "${RESTIC_REPOSITORY:-}" && -f .env.prod.secret ]]; then
   set -a; . ./.env.prod.secret; set +a
 fi
-: "${RESTIC_REPOSITORY:?not set — put it in .env.prod.secret}"
-: "${RESTIC_PASSWORD:?not set — put it in .env.prod.secret}"
+# Explicit tests rather than "${VAR:?message}": that idiom puts a secret's
+# name immediately before a colon and a string, which secret scanners read as
+# a hardcoded assignment (GitGuardian flagged all three of these scripts). It
+# also states plainly where the value is meant to come from.
+for _var in RESTIC_REPOSITORY RESTIC_PASSWORD; do
+  if [ -z "${!_var:-}" ]; then
+    echo "$_var is not set — put it in .env.prod.secret" >&2
+    exit 1
+  fi
+done
+unset _var
 
 # The containers are rootful, so anything but a root invocation needs sudo.
 SUDO=()
