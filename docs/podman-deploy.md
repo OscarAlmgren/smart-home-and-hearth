@@ -181,7 +181,7 @@ ls -lh /var/lib/smart-home-and-hearth/ha-config/home-assistant_v2.db   # recorde
 - [ ] Add the Matter integration in HA pointing at `ws://127.0.0.1:5580/ws`
 - [ ] `systemctl reboot` — all units come back on their own (`WantedBy=multi-user.target`)
 - [ ] Edit `config/configuration.yaml` in git, `git pull` on the server, `systemctl restart homeassistant.service` — change takes effect (manual for now; see Known gaps)
-- [ ] **Optional, not required for a first deploy** — once real `RESTIC_*`/`AWS_*` values are in `.env.prod.secret` and `backup.timer` is enabled: `sudo systemctl start backup.service` (runs it once, on demand) completes without error — `journalctl -u backup.service`
+- [x] **Done 2026-09-20.** `backup.timer` is enabled and `sudo systemctl start backup.service` completes without error (`journalctl -u backup.service`). The repository is the local path `/mnt/storage/restic`; the restore drill has been run and passed — see docs/disaster-recovery.md for both, including the still-open offsite gap.
 - [ ] **Restore drill**, once backups are enabled — `./scripts/restore.sh --target drill --snapshot latest`, then work through the checklist in docs/disaster-recovery.md § The restore drill. Do this before trusting backups with anything real.
 
 ## MicroK8s decommissioning

@@ -31,9 +31,36 @@ done
 [[ "$TARGET" == "drill" || "$TARGET" == "prod" ]] \
   || { echo "usage: $0 --target drill|prod [--snapshot ID] [--yes]" >&2; exit 2; }
 
-RESTIC_IMAGE="restic/restic:0.17.3"
+RESTIC_IMAGE="docker.io/restic/restic:0.17.3"
+
+# backup.service supplies the restic credentials via EnvironmentFile=; a
+# manual restore has no such wrapper, so read the same file directly.
+if [[ -z "${RESTIC_REPOSITORY:-}" && -f .env.prod.secret ]]; then
+  set -a; . ./.env.prod.secret; set +a
+fi
+: "${RESTIC_REPOSITORY:?not set — put it in .env.prod.secret}"
+: "${RESTIC_PASSWORD:?not set — put it in .env.prod.secret}"
+
+# The containers are rootful, so anything but a root invocation needs sudo.
+SUDO=()
+PODMAN=(podman)
+if [[ $EUID -ne 0 ]]; then
+  # sudo also resets the environment, and the `-e VAR` flags below take their
+  # values *from* it — so the restic credentials have to survive the hop.
+  # --preserve-env keeps them out of argv, which `-e VAR=value` would not.
+  SUDO=(sudo)
+  PODMAN=(sudo --preserve-env=RESTIC_REPOSITORY,RESTIC_PASSWORD,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY podman)
+fi
+
+# An absolute RESTIC_REPOSITORY is a host directory that has to be
+# bind-mounted into the restic container at the same path. See backup.sh.
+REPO_MOUNT=()
+if [[ "$RESTIC_REPOSITORY" == /* ]]; then
+  REPO_MOUNT=(-v "$RESTIC_REPOSITORY:$RESTIC_REPOSITORY")
+fi
+
 STAGING=$(mktemp -d)
-trap 'rm -rf "$STAGING"' EXIT
+trap 'rm -rf "$STAGING" 2>/dev/null || sudo rm -rf "$STAGING"' EXIT
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
@@ -84,11 +111,13 @@ fi
 # (scripts/backup.sh's VACUUM INTO output) becomes the restored DB file.
 say "Restoring config from snapshot ${SNAPSHOT}"
 sudo mkdir -p "$CONFIG_DIR"
-podman run --rm \
+"${PODMAN[@]}" run --rm \
+  "${REPO_MOUNT[@]}" \
   -e RESTIC_REPOSITORY -e RESTIC_PASSWORD -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
   -v "$CONFIG_DIR:/config" \
   -v "$STAGING:/staging-out" \
-  "$RESTIC_IMAGE" sh -eu -c "
+  --entrypoint sh \
+  "$RESTIC_IMAGE" -eu -c "
     restic restore '${SNAPSHOT}' --target / --include /config
     restic restore '${SNAPSHOT}' --target /staging-out --include /staging
     ls -lh /staging-out/staging/
@@ -101,10 +130,11 @@ sudo rm -f "$CONFIG_DIR/home-assistant_v2.db-shm" "$CONFIG_DIR/home-assistant_v2
 if [[ "$TARGET" == "prod" ]]; then
   say "Restoring the OTBR Thread dataset"
   sudo mkdir -p "$OTBR_DIR"
-  podman run --rm \
+  "${PODMAN[@]}" run --rm \
+    "${REPO_MOUNT[@]}" \
     -e RESTIC_REPOSITORY -e RESTIC_PASSWORD -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
     -v "$OTBR_DIR:/otbr" \
-    "$RESTIC_IMAGE" restic restore "${SNAPSHOT}" --target / --include /otbr
+    "$RESTIC_IMAGE" restore "${SNAPSHOT}" --target / --include /otbr
 
   say "Starting Home Assistant and OTBR"
   sudo systemctl start otbr.service homeassistant.service
@@ -113,11 +143,11 @@ fi
 
 # ── 3. Drill: fully isolated, never touches prod ────────────────────────────
 say "Setting up an isolated drill environment"
-podman network exists ha-drill || podman network create ha-drill
+"${PODMAN[@]}" network exists ha-drill || "${PODMAN[@]}" network create ha-drill
 
 say "Starting a scratch Home Assistant (bridge network, port 8124 — no radios, prod owns them)"
-podman rm -f homeassistant-drill >/dev/null 2>&1 || true
-podman run -d --name homeassistant-drill --network ha-drill \
+"${PODMAN[@]}" rm -f homeassistant-drill >/dev/null 2>&1 || true
+"${PODMAN[@]}" run -d --name homeassistant-drill --network ha-drill \
   -p 127.0.0.1:8124:8123 \
   -e TZ=Europe/Stockholm \
   -v "$CONFIG_DIR:/config" \
@@ -139,9 +169,9 @@ Verify — this is the part that matters (docs/disaster-recovery.md § The resto
 
 Tear down when done:
 
-  podman rm -f homeassistant-drill
+  sudo podman rm -f homeassistant-drill
   sudo rm -rf /var/lib/smart-home-and-hearth-drill
-  podman network rm ha-drill
+  sudo podman network rm ha-drill
 
 If any check fails, the backup is not doing its job — fix it now, while you
 still have the original.

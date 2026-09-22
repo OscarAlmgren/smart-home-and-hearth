@@ -15,10 +15,34 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CONFIG_DIR="/var/lib/smart-home-and-hearth/ha-config"
 OTBR_DIR="/var/lib/smart-home-and-hearth/otbr"
-RESTIC_IMAGE="restic/restic:0.17.3"
+RESTIC_IMAGE="docker.io/restic/restic:0.17.3"
+
+: "${RESTIC_REPOSITORY:?not set — backup.service supplies it from .env.prod.secret}"
+: "${RESTIC_PASSWORD:?not set — backup.service supplies it from .env.prod.secret}"
+
+# The containers are rootful, so anything but a root invocation needs sudo.
+# Under backup.service this already runs as root and SUDO stays empty.
+SUDO=()
+PODMAN=(podman)
+if [[ $EUID -ne 0 ]]; then
+  # sudo also resets the environment, and the `-e VAR` flags below take their
+  # values *from* it — so the restic credentials have to survive the hop.
+  # --preserve-env keeps them out of argv, which `-e VAR=value` would not.
+  SUDO=(sudo)
+  PODMAN=(sudo --preserve-env=RESTIC_REPOSITORY,RESTIC_PASSWORD,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY podman)
+fi
+
+# An absolute RESTIC_REPOSITORY is a *host* directory, but restic runs inside
+# a container — bind-mount it at the same path so one value works both inside
+# and outside. S3/SFTP/REST targets are URLs and need no mount.
+REPO_MOUNT=()
+if [[ "$RESTIC_REPOSITORY" == /* ]]; then
+  [[ -d "$RESTIC_REPOSITORY" ]] || "${SUDO[@]}" mkdir -p "$RESTIC_REPOSITORY"
+  REPO_MOUNT=(-v "$RESTIC_REPOSITORY:$RESTIC_REPOSITORY")
+fi
 
 STAGING=$(mktemp -d)
-trap 'rm -rf "$STAGING"' EXIT
+trap 'rm -rf "$STAGING" 2>/dev/null || sudo rm -rf "$STAGING"' EXIT
 
 # The recorder DB is a live WAL-mode SQLite file — a filesystem copy of it
 # mid-write is torn and unrestorable (podman/restic-excludes.txt excludes it
@@ -27,20 +51,22 @@ trap 'rm -rf "$STAGING"' EXIT
 # same role pg_dump used to play. Snapshot goes to the container's own /tmp
 # (never touches the bind-mounted /config), then out via `podman cp`.
 echo "==> snapshotting recorder database"
-podman exec homeassistant python3 -c \
+"${PODMAN[@]}" exec homeassistant python3 -c \
   "import sqlite3; c = sqlite3.connect('/config/home-assistant_v2.db'); c.execute(\"VACUUM INTO '/tmp/home-assistant_v2.snapshot.db'\"); c.close()"
-podman cp homeassistant:/tmp/home-assistant_v2.snapshot.db "$STAGING/home-assistant_v2.db"
-podman exec homeassistant rm -f /tmp/home-assistant_v2.snapshot.db
+"${PODMAN[@]}" cp homeassistant:/tmp/home-assistant_v2.snapshot.db "$STAGING/home-assistant_v2.db"
+"${PODMAN[@]}" exec homeassistant rm -f /tmp/home-assistant_v2.snapshot.db
 ls -lh "$STAGING/home-assistant_v2.db"
 
 echo "==> backing up"
-podman run --rm \
+"${PODMAN[@]}" run --rm \
+  "${REPO_MOUNT[@]}" \
   -e RESTIC_REPOSITORY -e RESTIC_PASSWORD -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
   -v "$STAGING:/staging:ro" \
   -v "$CONFIG_DIR:/config:ro" \
   -v "$OTBR_DIR:/otbr:ro" \
   -v "$PWD/podman/restic-excludes.txt:/etc/restic/excludes.txt:ro" \
-  "$RESTIC_IMAGE" sh -eu -c '
+  --entrypoint sh \
+  "$RESTIC_IMAGE" -eu -c '
     if ! restic cat config >/dev/null 2>&1; then
       echo "==> initialising restic repository"
       restic init
