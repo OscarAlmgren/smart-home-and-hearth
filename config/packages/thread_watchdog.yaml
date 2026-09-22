@@ -11,6 +11,36 @@
 # it can reach the loopback address the API is bound to. The endpoint returns a
 # JSON string like "router", "leader", "child", "detached" or "disabled"; if the
 # container is down the request fails and the sensor goes unavailable.
+#
+# ── What counts as an alarm, and why (revised 2026-09-22) ───────────────────
+#
+# The first version alarmed on any state outside leader/router/child, which
+# lumped "the antenna is gone" together with "this node is not currently
+# attached to a mesh". Those are different problems with different owners.
+#
+# Flipping a wall switch cuts mains from the KAJPLATS bulbs, and those bulbs are
+# Thread *routers*. Losing several at once makes the mesh re-form: the border
+# router can drop through "detached" on its way to re-electing a partition,
+# while the ZBT-1 itself is perfectly healthy and still on air. Waking someone
+# for that is crying wolf — the fix is to turn the lights back on, and Thread
+# repairs itself.
+#
+# So the alarm now fires only when the border router is not answering AT ALL:
+#
+#   unavailable / unknown  REST request failed. otbr-agent is not running, or
+#                          the container is gone, or the ZBT-1 is unplugged and
+#                          systemd stopped the unit (BindsTo= on the .device).
+#                          This is the "someone pulled the dongle" case.
+#   disabled               Agent is up but Thread is not started — e.g. a
+#                          replacement radio booted with no dataset, which is
+#                          exactly what a ZBT-1 swap does. Needs a human.
+#
+#   detached               NOT an alarm. Surfaced as a separate diagnostic
+#                          sensor below so it is visible on a dashboard without
+#                          notifying anyone.
+#   leader/router/child    Healthy. Note the border router stays "leader" even
+#                          when it is the only node left powered, so a house
+#                          full of switched-off bulbs reads healthy here.
 sensor:
   - platform: rest
     name: Thread border router state
@@ -22,17 +52,43 @@ sensor:
 
 template:
   - binary_sensor:
+      # THE ALARM. "The border router is not answering."
       - name: Thread border router down
         unique_id: thread_border_router_down
         device_class: problem
-        # "detached" and "disabled" mean the agent is alive but not on the mesh,
-        # which is just as broken from a device's point of view as no agent.
         state: >
           {{ states('sensor.thread_border_router_state')
-             not in ['leader', 'router', 'child'] }}
+             in ['unavailable', 'unknown', 'none', 'None', ''] }}
         # Ride out restarts: the unit recovers from an RCP drop in ~90 s and
         # rejoins the mesh a minute later, so anything shorter than this would
-        # cry wolf on a self-healed blip.
+        # cry wolf on a self-healed blip. Note delay_on cannot help on a Home
+        # Assistant restart that happens while the router is already down —
+        # there is no state change to delay, so it alarms at once. That case is
+        # real anyway, so it is left alone.
+        delay_on:
+          minutes: 10
+        delay_off:
+          seconds: 30
+
+      # ALSO THE ALARM, separate template only because the reason differs.
+      - name: Thread radio disabled
+        unique_id: thread_radio_disabled
+        device_class: problem
+        state: >
+          {{ is_state('sensor.thread_border_router_state', 'disabled') }}
+        delay_on:
+          minutes: 10
+        delay_off:
+          seconds: 30
+
+      # DIAGNOSTIC ONLY — deliberately not wired to a notifier. Expected to
+      # blink whenever a chunk of mains-powered Thread routers loses power.
+      # Worth looking at if it sticks for hours with the lights on.
+      - name: Thread border router off mesh
+        unique_id: thread_border_router_off_mesh
+        device_class: problem
+        state: >
+          {{ is_state('sensor.thread_border_router_state', 'detached') }}
         delay_on:
           minutes: 10
         delay_off:
@@ -64,13 +120,44 @@ alert:
          if is_state('binary_sensor.thread_border_router_down', 'on')
          else 'Thread RECOVERED - henrybook border router' }}
     message: >-
-      No Thread border router for 10+ minutes. Every Matter-over-Thread device
-      (chandelier, GRILLPLATS plug, BILRESA buttons) is unavailable. Most likely
-      the ZBT-1 USB dongle has been unplugged.
+      The Thread border router has not answered for 10+ minutes, so every
+      Matter-over-Thread device (chandelier, kitchen and laundry spots,
+      GRILLPLATS plug, BILRESA buttons) is unavailable. This is not caused by
+      lights being switched off at the wall — check that the ZBT-1 USB dongle is
+      plugged in, then `systemctl status otbr.service` on henrybook.
     done_message: >-
       Border router is back and on the mesh as
       {{ states('sensor.thread_border_router_state') }}. Thread devices should
       reappear within a minute or two.
+    notifiers:
+      - mobile_app_pixel_8
+      - persistent_notification
+
+  thread_radio_disabled:
+    name: Thread radio is disabled
+    entity_id: binary_sensor.thread_radio_disabled
+    state: "on"
+    repeat:
+      - 30
+      - 120
+      - 720
+      - 1440
+      - 10080
+    can_acknowledge: true
+    skip_first: false
+    title: >-
+      {{ 'Thread RADIO OFF - henrybook border router'
+         if is_state('binary_sensor.thread_radio_disabled', 'on')
+         else 'Thread RECOVERED - henrybook border router' }}
+    message: >-
+      otbr-agent is running but Thread is not started (state "disabled"), so the
+      mesh is down. Most likely the radio came up without a dataset — the usual
+      cause is a replaced dongle, since OpenThread keys its settings file to the
+      radio's extended address. See docs/disaster-recovery.md for restoring the
+      dataset with `ot-ctl dataset set active <tlv>`.
+    done_message: >-
+      Thread is started again, state
+      {{ states('sensor.thread_border_router_state') }}.
     notifiers:
       - mobile_app_pixel_8
       - persistent_notification
