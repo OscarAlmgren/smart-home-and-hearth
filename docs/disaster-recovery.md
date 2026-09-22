@@ -21,10 +21,13 @@ sealing key a restore depends on. Secrets are now plain gitignored files
 this repo's automation (a password manager, same as the restic password
 below).
 
-**OPTIONAL for a first deploy.** `backup.timer` is installed by
+**ENABLED 2026-09-20.** `backup.timer` is installed by
 `scripts/bootstrap-podman.sh` but not auto-enabled — see
-[podman-deploy.md](podman-deploy.md). Everything below applies once you've
-filled in real `RESTIC_*`/`AWS_*` credentials and enabled it.
+[podman-deploy.md](podman-deploy.md). It stayed disabled from the Podman
+migration right through to 2026-09-20, with every `RESTIC_*`/`AWS_*` value
+still the literal `CHANGEME`: for that entire period **nothing was backed
+up**, and nothing said so. It is now enabled, pointed at a local repository
+(see "Where backups go"), and the first restore drill has been run.
 
 Two stages in one script:
 
@@ -33,8 +36,9 @@ Two stages in one script:
    filesystem copy of `home-assistant_v2.db` — copying a WAL-mode SQLite file
    out from under a running Home Assistant produces a torn, unrestorable
    snapshot, the same reason `pg_dump` existed when the recorder was Postgres.
-2. **restic** ships the staged snapshot plus `/config` to an S3-compatible
-   target, applies retention, and verifies.
+2. **restic** ships the staged snapshot plus `/config` and `/otbr` to the
+   restic repository — an S3-compatible bucket or a local path — applies
+   retention, and verifies.
 
 ## Incidents
 
@@ -114,25 +118,46 @@ is structurally verified over a few weeks without the cost of a full re-read.
 
 ## Where backups go
 
-**restic is S3-first from day one**, so moving targets is a change to one Secret
-key rather than a rewrite.
+Moving targets is a change to one value in `.env.prod.secret`
+(`RESTIC_REPOSITORY`) rather than a rewrite.
 
 | Stage | Target | Status |
 |---|---|---|
-| Interim | Local path on the new HDD + a manual `rclone` copy off-box | ☐ pending HDD |
-| Planned | MinIO on a Raspberry Pi — `s3:http://minio.lan:9000/ha-backups` | ☐ pending Pi |
-| Recommended | A second, offsite restic target | ☐ your call |
+| Active | `/mnt/storage/restic` — local path on the 500 GB SSHD | ☑ since 2026-09-20 |
+| Recommended | A second, offsite target (Backblaze B2) via `restic copy` | ☐ your call |
+
+A `RESTIC_REPOSITORY` that starts with `/` is a **host** path, but restic runs
+in a container — `backup.sh`, `restore.sh` and `restic.sh` each bind-mount it
+at the same path so one value works inside and out. Without that mount restic
+says "repository does not exist", which points at the wrong problem.
 
 ### On the offsite gap
 
-The HDD protects against flash failure only: same machine, same power supply,
-same room. MinIO on the LAN is better — different machine, different disk — but
-it is **still not offsite**. A fire, a theft, a lightning strike on the mains, or
-a mistake that wipes both would take every copy you have.
+**This is the known weak point of the current setup, and it is deliberate.**
+Home Assistant's data lives on `/mnt/storage` too (`/var/lib/smart-home-and-hearth`
+is a symlink onto the SSHD), so the repository shares a disk with the thing it
+is backing up. That means the local repository protects against:
+
+- a bad config edit, a broken upgrade, an accidental delete;
+- recorder-database corruption;
+- a container-store reset like the one the 2026-08-25 migration performed.
+
+and **not** against the SSHD dying, a fire, a theft, or a lightning strike on
+the mains — the exact failure that started this project. One disk failure
+still takes the house's automation with it.
 
 3-2-1 is three copies, two media, **one offsite**. A Backblaze B2 bucket as a
-second restic target costs roughly €0.50/month at this data size and closes the
-gap. Adding it is your call; it is flagged rather than assumed.
+second target costs roughly €0.50/month at this data size (the repository is
+~30 MB) and closes the gap:
+
+```bash
+# Second repo, then a nightly copy that needs no re-read of the source data.
+restic -r s3:s3.eu-central-003.backblazeb2.com/<bucket> init \
+  --copy-chain-from-repo /mnt/storage/restic
+./scripts/restic.sh copy --from-repo /mnt/storage/restic ...
+```
+
+Adding it is your call; it is flagged rather than assumed.
 
 ### The restic password
 
@@ -152,12 +177,13 @@ on this machine.
 ### Single file or directory
 
 ```bash
-podman run --rm \
-  -e RESTIC_REPOSITORY=... -e RESTIC_PASSWORD=... \
-  -v /tmp/restore:/tmp/restore \
-  restic/restic:0.17.3 \
-  restore latest --target /tmp/restore --include /config/.storage
+./scripts/restic.sh restore latest \\
+  --target /tmp/restore --include /config/.storage
 ```
+
+`scripts/restic.sh` wraps the restic container: it reads the credentials from
+`.env.prod.secret`, bind-mounts a local repository, and passes everything else
+straight through (`snapshots`, `ls latest /otbr`, `stats`, `diff`, ...).
 
 ### The database
 
@@ -191,6 +217,14 @@ backup target**.
 
 **Run this once before considering the migration complete, then every six
 months.** It is the acceptance test for the whole project.
+
+**Drill log — 2026-09-20, first drill, PASSED.** Snapshot `8a48d2b8`: 1138
+entity-registry entries (byte-identical count to prod), both user accounts
+present, recorder DB `PRAGMA integrity_check` ok with 74 230 state rows
+spanning 2026-09-13 → 2026-09-20, `thread.datasets` back with
+`preferred_dataset` still pointing at `ha-thread-a999`, all three `/otbr`
+settings files in the snapshot, and the drill Home Assistant served HTTP 200
+with nothing in its log. Next drill due **2027-03-20**.
 
 ```bash
 # Restores the latest snapshot into an isolated network, and brings up a
