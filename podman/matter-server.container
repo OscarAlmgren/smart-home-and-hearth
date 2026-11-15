@@ -26,7 +26,7 @@ StartLimitIntervalSec=600
 StartLimitBurst=10
 
 [Container]
-Image=ghcr.io/home-assistant-libs/python-matter-server:stable
+Image=ghcr.io/home-assistant-libs/python-matter-server:8.1.0
 ContainerName=matter-server
 
 # Host networking so HA (also host-networked) can reach the websocket at

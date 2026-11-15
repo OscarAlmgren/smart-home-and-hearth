@@ -31,7 +31,7 @@ StartLimitBurst=10
 [Container]
 # HA_VERSION must match .env.prod — scripts/deploy.sh checks this before
 # restarting the unit, same drift check render-env.sh did for the k8s overlay.
-Image=ghcr.io/home-assistant/home-assistant:2026.7.4
+Image=ghcr.io/home-assistant/home-assistant:2026.11.1
 ContainerName=homeassistant
 
 Network=host
