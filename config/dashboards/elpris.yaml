@@ -1,34 +1,76 @@
 # Household electricity guide: "should I run it now or wait?"
 #
-# Deliberately four cards and no charts. Written for someone who wants one
-# answer, in Swedish like the Klimat dashboard. Registered in
-# packages/energy.yaml (url: /elpris-hem). Git owns this file.
+# Written for someone who wants one answer, in Swedish like the Klimat
+# dashboard. Registered in packages/energy.yaml (url: /elpris-hem). Git owns
+# this file.
 #
-# Everything shown comes from packages/electricity_guide.yaml (the rating and
-# the cheapest windows) plus a few existing sensors:
+# Needs the ApexCharts Card (RomRider/apexcharts-card, installed through the
+# Marketplace as a Lovelace resource). Prices are shown in öre/kWh like the
+# Tibber app. They come from Tibber's API and do not include the grid fee, so
+# they sit below the app's figures.
+#
+# Data comes from packages/electricity_guide.yaml:
+#   sensor.electricity_price_forecast   price series, per-slot rating, averages
+#   sensor.electricity_price_rating     cheap / normal / expensive right now
+#   sensor.cheapest_window_machines     best 3 h block (dishwasher, laundry, drying cabinet)
+#   sensor.cheapest_window_car          best 4 h block
+# and a few existing sensors:
 #   sensor.ev_charger_capacity / _cost_daily   charger kW and today's estimate
 #   sensor.garaget_e2eflgqppz_laddningsstatus  charger status
 #   sensor.tibber_car_laddningsniva_soc        car battery (whichever car Tibber has)
 #   sensor.vardagsrum_grillplats_plug_1_effekt drying cabinet power
 #
-# Markdown blocks use `|` (literal), not `>` (folded): folding would turn the
-# blank lines between paragraphs into single newlines.
+# Text cards use `|` (literal), not `>` (folded): folding would turn the blank
+# lines between paragraphs into single newlines.
 title: Elpris
 views:
   - title: Nu
     path: nu
     icon: mdi:cash-clock
     cards:
-      # 1. The one-line answer.
+      # 1. The ring: current price in öre/kWh. The ring fills as a share of
+      # 500 öre, a visual scale only; the cheap/dear call is made by the
+      # rating sensor, not by the ring.
+      - type: custom:apexcharts-card
+        chart_type: radialBar
+        header:
+          show: false
+        series:
+          - entity: sensor.electricity_price_forecast
+            name: öre/kWh just nu
+            transform: "return x / 5;"
+            color: "#f28c38"
+        apex_config:
+          chart:
+            height: 250
+          legend:
+            show: false
+          plotOptions:
+            radialBar:
+              hollow:
+                size: 68%
+              dataLabels:
+                name:
+                  show: true
+                  offsetY: 28
+                  fontSize: 14px
+                value:
+                  show: true
+                  offsetY: -16
+                  fontSize: 44px
+                  fontWeight: 700
+                  formatter: |
+                    EVAL:function(v) { return Math.round(v * 5); }
+
+      # 2. The one-line answer.
       - type: markdown
         content: |
           {% set r = states('sensor.electricity_price_rating') %}
+          {% set f = 'sensor.electricity_price_forecast' %}
           {% set head = {'cheap': '🟢 Billigt just nu', 'normal': '🟡 Normalt pris just nu', 'expensive': '🔴 Dyrt just nu'} %}
           {% set advice = {'cheap': 'Bra läge att köra disk, tvätt och ladda bilen.', 'normal': 'Okej att köra om det behövs. Billigare tider finns längre ned.', 'expensive': 'Vänta gärna med disk, tvätt och bilen om det går.'} %}
           {% if r in head %}
           # {{ head[r] }}
-
-          **{{ ('%.2f' % (state_attr('sensor.electricity_price_rating', 'price_now') | float(0))) | replace('.', ',') }} kr per kWh**
 
           {{ advice[r] }}
           {% set nc = state_attr('sensor.electricity_price_rating', 'next_change_at') %}
@@ -37,11 +79,106 @@ views:
           {% set t = as_datetime(nc) | as_local %}
           {{ nl }} från kl **{{ t.strftime('%H:%M') }}**{% if t.date() != now().date() %} (imorgon){% endif %}.
           {% endif %}
+
+          Snittpris idag **{{ state_attr(f, 'avg_today') }} öre**{% if state_attr(f, 'avg_tomorrow') %}, imorgon **{{ state_attr(f, 'avg_tomorrow') }} öre**{% endif %}.
           {% else %}
           # ⚪ Elpriset är inte tillgängligt just nu
           {% endif %}
 
-      # 2. Dishwasher, washing machine, drying cabinet.
+      # 3. Two days of prices. Line colour = cheap / normal / dear for that day;
+      # the two bars at the bottom are the best times to run things.
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: Elpris, idag och imorgon
+          show_states: false
+        graph_span: 48h
+        span:
+          start: day
+        now:
+          show: true
+          label: Nu
+          color: "#8a8f98"
+        chart_type: line
+        locale: sv
+        # "~500" is a soft maximum: the axis grows past 500 öre if a price does.
+        yaxis:
+          - min: 0
+            max: "~500"
+            decimals: 0
+            apex_config:
+              tickAmount: 5
+        apex_config:
+          chart:
+            height: 300
+          stroke:
+            curve: stepline
+          legend:
+            show: true
+            position: bottom
+          tooltip:
+            x:
+              format: ddd HH:mm
+          xaxis:
+            tickAmount: 9
+            labels:
+              datetimeUTC: false
+              datetimeFormatter:
+                day: ddd d
+                hour: HH:mm
+        series:
+          # Base line: every quarter hour, drawn in the "normal" colour.
+          - entity: sensor.electricity_price_forecast
+            name: Normalt
+            color: "#f2b84b"
+            stroke_width: 2
+            show:
+              legend_value: false
+            data_generator: |
+              return entity.attributes.prices.map(d => [d[0], d[1]]);
+          # Overlays: only the quarter hours of that rating, plus their
+          # neighbours so the segment joins up. null breaks the line between
+          # separate runs.
+          - entity: sensor.electricity_price_forecast
+            name: Billigt
+            color: "#35d0a5"
+            stroke_width: 3
+            show:
+              legend_value: false
+            data_generator: |
+              const p = entity.attributes.prices, l = entity.attributes.levels;
+              return p.map((d, i) => (l[i] === 'c' || l[i-1] === 'c' || l[i+1] === 'c') ? [d[0], d[1]] : [d[0], null]);
+          - entity: sensor.electricity_price_forecast
+            name: Dyrt
+            color: "#ff5c4a"
+            stroke_width: 3
+            show:
+              legend_value: false
+            data_generator: |
+              const p = entity.attributes.prices, l = entity.attributes.levels;
+              return p.map((d, i) => (l[i] === 'e' || l[i-1] === 'e' || l[i+1] === 'e') ? [d[0], d[1]] : [d[0], null]);
+          # Best-time bars, drawn below the lowest prices. extend_to: false stops
+          # the card stretching a series to the end of the graph.
+          - entity: sensor.cheapest_window_machines
+            name: "Bäst: disk, tvätt, torkskåp"
+            color: "#4cc9f0"
+            stroke_width: 9
+            extend_to: false
+            show:
+              legend_value: false
+            data_generator: |
+              return [[new Date(entity.state).getTime(), 20], [new Date(entity.attributes.ends_at).getTime(), 20]];
+          - entity: sensor.cheapest_window_car
+            name: "Bäst: bilen"
+            color: "#b388ff"
+            stroke_width: 9
+            extend_to: false
+            show:
+              legend_value: false
+            data_generator: |
+              return [[new Date(entity.state).getTime(), 45], [new Date(entity.attributes.ends_at).getTime(), 45]];
+
+      # 4. Dishwasher, washing machine, drying cabinet.
       - type: markdown
         title: Disk, tvätt och torkskåp
         content: |
@@ -53,7 +190,7 @@ views:
           ## Billigast kl {{ a.strftime('%H:%M') }}–{{ b.strftime('%H:%M') }}{% if a.date() != now().date() %} (imorgon){% endif %}
 
           {% if a <= now() + timedelta(minutes=15) %}**Det är billigast att köra nu.**
-          {% elif sv >= 10 %}Snittpris {{ ('%.2f' % (state_attr(e, 'avg_price') | float(0))) | replace('.', ',') }} kr/kWh, ungefär **{{ sv }} % billigare** än att starta nu.
+          {% elif sv >= 10 %}Snittpris {{ ((state_attr(e, 'avg_price') | float(0)) * 100) | round(0) | int }} öre/kWh, ungefär **{{ sv }} % billigare** än att starta nu.
           {% else %}Skillnaden mot att starta nu är liten ({{ sv }} %). Kör när det passar.
           {% endif %}
           {% else %}
@@ -63,7 +200,7 @@ views:
           {% set w = states('sensor.vardagsrum_grillplats_plug_1_effekt') | float(0) %}
           Torkskåpet {{ 'går nu (' ~ (w | round(0) | int) ~ ' W)' if w > 5 else 'är av' }}.
 
-      # 3. The car.
+      # 5. The car.
       - type: markdown
         title: Bilen
         content: |
@@ -86,24 +223,3 @@ views:
           {% endif %}
 
           Laddat idag (uppskattning): {{ states('sensor.ev_charger_cost_daily') | float(0) | round(0) | int }} kr
-
-      # 4. The whole day as colours.
-      - type: markdown
-        title: Dygnet i färger
-        content: |
-          🟢 billigt  🟡 normalt  🔴 dyrt
-
-          {% set days = [['Idag', state_attr('sensor.electricity_price_rating', 'levels_today'), true], ['Imorgon', state_attr('sensor.electricity_price_rating', 'levels_tomorrow'), false]] %}
-          {% for name, l, is_today in days %}
-          **{{ name }}**
-
-          {% if l %}
-          {% for row in range(4) %}
-          {% for i in range(6) %}{% set h = row * 6 + i %}{{ ('**%02d**' % h) if (is_today and h == now().hour) else ('%02d' % h) }} {{ l[h] }}  {% endfor %}
-
-          {% endfor %}
-          {% else %}
-          Priserna är inte publicerade än (de kommer vid 13:15).
-
-          {% endif %}
-          {% endfor %}
