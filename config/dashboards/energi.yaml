@@ -56,24 +56,6 @@ views:
             needle: true
             severity: { green: 0, yellow: 10, red: 14 }
 
-      - type: horizontal-stack
-        cards:
-          - type: gauge
-            entity: sensor.garaget_e2eflgqppz_spanning_l1
-            name: L1 volt
-            min: 207
-            max: 253
-          - type: gauge
-            entity: sensor.garaget_e2eflgqppz_spanning_l2
-            name: L2 volt
-            min: 207
-            max: 253
-          - type: gauge
-            entity: sensor.garaget_e2eflgqppz_spanning_l3
-            name: L3 volt
-            min: 207
-            max: 253
-
       # The fuse rating is plotted as a flat line so headroom is visible.
       - type: history-graph
         title: Phase current vs fuse (24 h)
