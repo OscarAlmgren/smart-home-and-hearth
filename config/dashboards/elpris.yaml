@@ -1,0 +1,109 @@
+# Household electricity guide: "should I run it now or wait?"
+#
+# Deliberately four cards and no charts. Written for someone who wants one
+# answer, in Swedish like the Klimat dashboard. Registered in
+# packages/energy.yaml (url: /elpris-hem). Git owns this file.
+#
+# Everything shown comes from packages/electricity_guide.yaml (the rating and
+# the cheapest windows) plus a few existing sensors:
+#   sensor.ev_charger_capacity / _cost_daily   charger kW and today's estimate
+#   sensor.garaget_e2eflgqppz_laddningsstatus  charger status
+#   sensor.tibber_car_laddningsniva_soc        car battery (whichever car Tibber has)
+#   sensor.vardagsrum_grillplats_plug_1_effekt drying cabinet power
+#
+# Markdown blocks use `|` (literal), not `>` (folded): folding would turn the
+# blank lines between paragraphs into single newlines.
+title: Elpris
+views:
+  - title: Nu
+    path: nu
+    icon: mdi:cash-clock
+    cards:
+      # 1. The one-line answer.
+      - type: markdown
+        content: |
+          {% set r = states('sensor.electricity_price_rating') %}
+          {% set head = {'cheap': '🟢 Billigt just nu', 'normal': '🟡 Normalt pris just nu', 'expensive': '🔴 Dyrt just nu'} %}
+          {% set advice = {'cheap': 'Bra läge att köra disk, tvätt och ladda bilen.', 'normal': 'Okej att köra om det behövs. Billigare tider finns längre ned.', 'expensive': 'Vänta gärna med disk, tvätt och bilen om det går.'} %}
+          {% if r in head %}
+          # {{ head[r] }}
+
+          **{{ ('%.2f' % (state_attr('sensor.electricity_price_rating', 'price_now') | float(0))) | replace('.', ',') }} kr per kWh**
+
+          {{ advice[r] }}
+          {% set nc = state_attr('sensor.electricity_price_rating', 'next_change_at') %}
+          {% set nl = {'cheap': 'Billigt', 'normal': 'Normalt', 'expensive': 'Dyrt'}.get(state_attr('sensor.electricity_price_rating', 'next_change_level'), '') %}
+          {% if nc and nl %}
+          {% set t = as_datetime(nc) | as_local %}
+          {{ nl }} från kl **{{ t.strftime('%H:%M') }}**{% if t.date() != now().date() %} (imorgon){% endif %}.
+          {% endif %}
+          {% else %}
+          # ⚪ Elpriset är inte tillgängligt just nu
+          {% endif %}
+
+      # 2. Dishwasher, washing machine, drying cabinet.
+      - type: markdown
+        title: Disk, tvätt och torkskåp
+        content: |
+          {% set e = 'sensor.cheapest_window_machines' %}
+          {% if has_value(e) %}
+          {% set a = as_datetime(states(e)) | as_local %}
+          {% set b = as_datetime(state_attr(e, 'ends_at')) | as_local %}
+          {% set sv = state_attr(e, 'saving_pct') | int(0) %}
+          ## Billigast kl {{ a.strftime('%H:%M') }}–{{ b.strftime('%H:%M') }}{% if a.date() != now().date() %} (imorgon){% endif %}
+
+          {% if a <= now() + timedelta(minutes=15) %}**Det är billigast att köra nu.**
+          {% elif sv >= 10 %}Snittpris {{ ('%.2f' % (state_attr(e, 'avg_price') | float(0))) | replace('.', ',') }} kr/kWh, ungefär **{{ sv }} % billigare** än att starta nu.
+          {% else %}Skillnaden mot att starta nu är liten ({{ sv }} %). Kör när det passar.
+          {% endif %}
+          {% else %}
+          Inget billigt block hittades i de priser som finns än. Morgondagens priser kommer vid 13:15.
+          {% endif %}
+
+          {% set w = states('sensor.vardagsrum_grillplats_plug_1_effekt') | float(0) %}
+          Torkskåpet {{ 'går nu (' ~ (w | round(0) | int) ~ ' W)' if w > 5 else 'är av' }}.
+
+      # 3. The car.
+      - type: markdown
+        title: Bilen
+        content: |
+          {% set e = 'sensor.cheapest_window_car' %}
+          {% set p = state_attr('sensor.electricity_price_rating', 'price_now') | float(0) %}
+          {% set kw = states('sensor.ev_charger_capacity') | float(0) %}
+          {% set st = states('sensor.garaget_e2eflgqppz_laddningsstatus') %}
+          Laddboxen: **{{ {'idle': 'väntar', 'charging': 'laddar'}.get(st, st) }}**{% if has_value('sensor.tibber_car_laddningsniva_soc') %} · Bilens batteri: **{{ states('sensor.tibber_car_laddningsniva_soc') }} %**{% endif %}
+
+          {% if has_value(e) %}
+          {% set a = as_datetime(states(e)) | as_local %}
+          {% set b = as_datetime(state_attr(e, 'ends_at')) | as_local %}
+          Billigast att ladda kl **{{ a.strftime('%H:%M') }}–{{ b.strftime('%H:%M') }}**{% if a.date() != now().date() %} (imorgon){% endif %}.
+          {% if kw > 0 and p > 0 %}
+
+          Full laddning ({{ kw | round(0) | int }} kW) kostar nu ca **{{ (p * kw) | round(0) | int }} kr/timme**, under det billigaste blocket ca **{{ ((state_attr(e, 'avg_price') | float(0)) * kw) | round(0) | int }} kr/timme**.
+          {% endif %}
+          {% else %}
+          Inget billigt block hittades i de priser som finns än.
+          {% endif %}
+
+          Laddat idag (uppskattning): {{ states('sensor.ev_charger_cost_daily') | float(0) | round(0) | int }} kr
+
+      # 4. The whole day as colours.
+      - type: markdown
+        title: Dygnet i färger
+        content: |
+          🟢 billigt  🟡 normalt  🔴 dyrt
+
+          {% set days = [['Idag', state_attr('sensor.electricity_price_rating', 'levels_today'), true], ['Imorgon', state_attr('sensor.electricity_price_rating', 'levels_tomorrow'), false]] %}
+          {% for name, l, is_today in days %}
+          **{{ name }}**
+
+          {% if l %}
+          {% for row in range(4) %}
+          {% for i in range(6) %}{% set h = row * 6 + i %}{{ ('**%02d**' % h) if (is_today and h == now().hour) else ('%02d' % h) }} {{ l[h] }}  {% endfor %}
+
+          {% endfor %}
+          {% else %}
+          Priserna är inte publicerade än (de kommer vid 13:15).
+
+          {% endif %}
+          {% endfor %}

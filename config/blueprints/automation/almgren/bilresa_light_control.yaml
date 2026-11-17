@@ -1,0 +1,213 @@
+# IKEA BILRESA two-button remote -> one light (or light group).
+#
+# Replaces six near-identical automations per remote with one instance of this
+# blueprint (two instances today: kitchen lights and the dining-table chandelier).
+#
+#   ON  short press   turn on in its last state
+#   OFF short press   turn off
+#   ON  hold          brighter in steps while held
+#   OFF hold          dimmer in steps while held (stops at min_brightness, never
+#                     switches the light off)
+#   ON  double press  one step cooler (whiter) on the colour ladder
+#   OFF double press  one step warmer on the colour ladder
+#
+# The automation runs in `restart` mode on purpose: releasing the button or
+# pressing the other one cancels a hold loop immediately.
+#
+# Deployed by scripts/sync-ha-config.sh (git owns this file) and registered in
+# HA as blueprint path "almgren/bilresa_light_control.yaml".
+
+blueprint:
+  name: BILRESA – tänd/släck, dimra och färgtemperatur
+  description: >-
+    Styr en lampa eller lampgrupp med en IKEA BILRESA-fjärr med två knappar.
+    Kort tryck tänder/släcker, håll dimrar upp/ner, dubbeltryck stegar
+    färgtemperaturen kallare/varmare.
+  domain: automation
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    button_on:
+      name: Knapp 1 (PÅ)
+      description: Event-entiteten för den övre knappen.
+      selector:
+        entity:
+          domain: event
+    button_off:
+      name: Knapp 2 (AV)
+      description: Event-entiteten för den nedre knappen.
+      selector:
+        entity:
+          domain: event
+    light:
+      name: Lampa eller grupp
+      selector:
+        entity:
+          domain: light
+    brightness_step_pct:
+      name: Dimmersteg
+      description: Procent per steg medan knappen hålls.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 50
+          unit_of_measurement: "%"
+    hold_interval_ms:
+      name: Tid mellan dimmersteg
+      default: 450
+      selector:
+        number:
+          min: 100
+          max: 2000
+          unit_of_measurement: ms
+    max_hold_steps:
+      name: Max antal dimmersteg
+      description: Säkerhetsgräns om släpp-eventet skulle utebli.
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 100
+    min_brightness:
+      name: Lägsta ljusstyrka vid dimning
+      description: 0-255. Dimning håller stannar här i stället för att släcka.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 128
+    colour_ladder:
+      name: Färgtemperaturstege (kelvin)
+      description: Stigande lista. Dubbeltryck stegar längs den.
+      default: [2202, 2500, 2700, 3000, 3500, 4000, 5000, 6535]
+      selector:
+        object:
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  target_light: !input light
+  step_pct: !input brightness_step_pct
+  interval_ms: !input hold_interval_ms
+  max_steps: !input max_hold_steps
+  min_bri: !input min_brightness
+  ladder: !input colour_ladder
+  button_on_entity: !input button_on
+  button_off_entity: !input button_off
+  # The event entity that fired, and what kind of press it was.
+  pressed: "{{ button_on_entity if trigger.id == 'up' else button_off_entity }}"
+  press: "{{ trigger.to_state.attributes.event_type }}"
+
+triggers:
+  - trigger: state
+    id: up
+    entity_id: !input button_on
+    not_to:
+      - unavailable
+      - unknown
+  - trigger: state
+    id: down
+    entity_id: !input button_off
+    not_to:
+      - unavailable
+      - unknown
+
+conditions:
+  # Event entities change state on every press (the state is a timestamp);
+  # ignore the first state after a restart, which has no previous state.
+  - condition: template
+    value_template: >-
+      {{ trigger.from_state is not none
+         and trigger.to_state.state != trigger.from_state.state }}
+
+actions:
+  - choose:
+      - alias: Kort tryck PÅ – tänd
+        conditions:
+          - "{{ trigger.id == 'up' and press == 'multi_press_1' }}"
+        sequence:
+          - action: light.turn_on
+            target:
+              entity_id: !input light
+            data:
+              transition: 0.5
+
+      - alias: Kort tryck AV – släck
+        conditions:
+          - "{{ trigger.id == 'down' and press == 'multi_press_1' }}"
+        sequence:
+          - action: light.turn_off
+            target:
+              entity_id: !input light
+            data:
+              transition: 0.5
+
+      - alias: Håll PÅ – ljusare
+        conditions:
+          - "{{ trigger.id == 'up' and press == 'long_press' }}"
+        sequence:
+          - repeat:
+              while:
+                - "{{ state_attr(pressed, 'event_type') == 'long_press' }}"
+                - "{{ repeat.index < max_steps | int(30) }}"
+                - "{{ (state_attr(target_light, 'brightness') | int(0)) < 254 }}"
+              sequence:
+                - action: light.turn_on
+                  target:
+                    entity_id: !input light
+                  data:
+                    brightness_step_pct: "{{ step_pct | int(10) }}"
+                    transition: "{{ ((interval_ms | int(450)) / 1000) | round(2) }}"
+                - delay:
+                    milliseconds: "{{ interval_ms | int(450) }}"
+
+      - alias: Håll AV – mörkare
+        conditions:
+          - "{{ trigger.id == 'down' and press == 'long_press' }}"
+        sequence:
+          - repeat:
+              while:
+                - "{{ state_attr(pressed, 'event_type') == 'long_press' }}"
+                - "{{ repeat.index < max_steps | int(30) }}"
+                - >-
+                  {{ is_state(target_light, 'on')
+                     and (state_attr(target_light, 'brightness') | int(0)) > (min_bri | int(15)) }}
+              sequence:
+                - action: light.turn_on
+                  target:
+                    entity_id: !input light
+                  data:
+                    brightness_step_pct: "{{ -(step_pct | int(10)) }}"
+                    transition: "{{ ((interval_ms | int(450)) / 1000) | round(2) }}"
+                - delay:
+                    milliseconds: "{{ interval_ms | int(450) }}"
+
+      - alias: Dubbeltryck PÅ – kallare
+        conditions:
+          - "{{ trigger.id == 'up' and press == 'multi_press_2' }}"
+        sequence:
+          - action: light.turn_on
+            target:
+              entity_id: !input light
+            data:
+              transition: 0.5
+              color_temp_kelvin: >-
+                {% set cur = state_attr(target_light, 'color_temp_kelvin') | int(2700) %}
+                {% set nxt = ladder | select('gt', cur * 1.02) | list %}
+                {{ nxt[0] if nxt else ladder | last }}
+
+      - alias: Dubbeltryck AV – varmare
+        conditions:
+          - "{{ trigger.id == 'down' and press == 'multi_press_2' }}"
+        sequence:
+          - action: light.turn_on
+            target:
+              entity_id: !input light
+            data:
+              transition: 0.5
+              color_temp_kelvin: >-
+                {% set cur = state_attr(target_light, 'color_temp_kelvin') | int(2700) %}
+                {% set nxt = ladder | select('lt', cur * 0.98) | list %}
+                {{ nxt[-1] if nxt else ladder | first }}

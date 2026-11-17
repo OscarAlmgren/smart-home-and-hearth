@@ -141,3 +141,13 @@ lovelace:
       icon: mdi:flash
       show_in_sidebar: true
       require_admin: false
+    # Simple "run it now or wait?" page for the household, fed by
+    # packages/electricity_guide.yaml. Registered here because two packages
+    # cannot both define lovelace.dashboards.
+    elpris-hem:
+      mode: yaml
+      filename: dashboards/elpris.yaml
+      title: Elpris
+      icon: mdi:cash-clock
+      show_in_sidebar: true
+      require_admin: false

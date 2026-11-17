@@ -1,0 +1,227 @@
+# Electricity price guide: turns Tibber's 15-minute prices into answers a
+# person can act on without reading a price chart.
+#
+#   sensor.electricity_price_rating   cheap / normal / expensive right now, plus
+#                                     when that changes and a 24 h colour strip
+#   sensor.cheapest_window_machines   start of the cheapest 3 h block from now on
+#                                     (dishwasher, washing machine, drying cabinet)
+#   sensor.cheapest_window_car        start of the cheapest 4 h block from now on
+#
+# Displayed by dashboards/elpris.yaml.
+#
+# How the rating works: each day's 96 quarter-hour prices are split into thirds.
+# The cheapest third is "cheap", the dearest third "expensive". It is relative
+# to the day on purpose: the useful question is "should I wait", not "is
+# 2 kr/kWh a lot". Tomorrow is rated against tomorrow's own prices.
+#
+# Tibber publishes tomorrow's prices around 13:15. Until then the windows only
+# look at what is left of today, and a late-evening window may not exist yet
+# (the sensor goes unavailable instead of guessing).
+#
+# The window lengths are `hours_machines` and `hours_car` below. They are
+# round numbers for a typical wash cycle and a typical top-up charge, not
+# measurements of this house.
+#
+# Updated every 15 minutes, on start, and on template reload. If Tibber cannot
+# be reached the action is skipped and the sensors go unavailable.
+
+template:
+  - triggers:
+      - trigger: time_pattern
+        minutes: "/15"
+      - trigger: homeassistant
+        event: start
+      - trigger: event
+        event_type: event_template_reloaded
+    actions:
+      - action: tibber.get_prices
+        continue_on_error: true
+        data:
+          start: "{{ now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat() }}"
+          end: >-
+            {{ (now().replace(hour=0, minute=0, second=0, microsecond=0)
+                + timedelta(days=2)).isoformat() }}
+        response_variable: prices
+
+      # Everything is computed once here and then read by the sensors below.
+      # Values must be plain strings/numbers/lists/dicts so they survive HA's
+      # template result parsing.
+      - variables:
+          hours_machines: 3
+          hours_car: 4
+          today: "{{ now().date().isoformat() }}"
+          tomorrow: "{{ (now() + timedelta(days=1)).date().isoformat() }}"
+          # Start of the current quarter hour.
+          cur: >-
+            {{ now().replace(minute=(now().minute // 15) * 15, second=0,
+                             microsecond=0).isoformat() }}
+          # [{start_time, price}] for every published quarter hour (today and,
+          # once published, tomorrow).
+          rows: >-
+            {% set p = (prices | default({})).get('prices', {}) %}
+            {{ (p.values() | list | first) if p else [] }}
+          # Quarter hours from now on: [{t, p}].
+          slots: >-
+            {% set c = as_datetime(cur) %}
+            {% set ns = namespace(o=[]) %}
+            {% for r in rows %}
+              {% if as_datetime(r.start_time) >= c %}
+                {% set ns.o = ns.o + [{'t': r.start_time, 'p': r.price}] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.o }}
+          # [[cheap_below, expensive_above] today, [..] tomorrow]: the 1/3 and
+          # 2/3 points of that day's sorted prices. [none, none] if the day is
+          # not (fully) published.
+          lim: >-
+            {% set ns = namespace(l=[]) %}
+            {% for day in [today, tomorrow] %}
+              {% set q = namespace(p=[]) %}
+              {% for r in rows if r.start_time[:10] == day %}
+                {% set q.p = q.p + [r.price] %}
+              {% endfor %}
+              {% set ps = q.p | sort %}
+              {% if ps | length >= 24 %}
+                {% set ns.l = ns.l + [[ps[(ps | length) // 3], ps[((ps | length) * 2) // 3]]] %}
+              {% else %}
+                {% set ns.l = ns.l + [[none, none]] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.l }}
+          # Price of the current quarter hour, or none if the data is stale.
+          now_p: >-
+            {{ slots[0].p if slots and as_datetime(slots[0].t) == as_datetime(cur) else none }}
+          now_level: >-
+            {% if now_p is none %}unknown
+            {% else %}
+              {% set l = lim[0] %}
+              {{ 'cheap' if l[0] is not none and now_p <= l[0]
+                 else ('expensive' if l[1] is not none and now_p >= l[1] else 'normal') }}
+            {% endif %}
+          # When the rating next changes: {t, level} or {} if not within the
+          # published prices.
+          next_change: >-
+            {% macro lv(s) -%}
+              {%- set l = lim[0] if s.t[:10] == today else lim[1] -%}
+              {%- if l[0] is none -%}normal
+              {%- elif s.p <= l[0] -%}cheap
+              {%- elif s.p >= l[1] -%}expensive
+              {%- else -%}normal{%- endif -%}
+            {%- endmacro %}
+            {% set ns = namespace(t='', l='') %}
+            {% if slots and now_p is not none %}
+              {% set first = lv(slots[0]) | trim %}
+              {% for s in slots[1:] %}
+                {% if not ns.t and (lv(s) | trim) != first %}
+                  {% set ns.t = s.t %}{% set ns.l = lv(s) | trim %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ {'t': ns.t, 'level': ns.l} if ns.t else {} }}
+          # Start of the next cheap quarter hour, '' if none published.
+          next_cheap: >-
+            {% macro lv(s) -%}
+              {%- set l = lim[0] if s.t[:10] == today else lim[1] -%}
+              {%- if l[0] is none -%}normal
+              {%- elif s.p <= l[0] -%}cheap
+              {%- elif s.p >= l[1] -%}expensive
+              {%- else -%}normal{%- endif -%}
+            {%- endmacro %}
+            {% set ns = namespace(t='') %}
+            {% for s in slots[1:] %}
+              {% if not ns.t and (lv(s) | trim) == 'cheap' %}{% set ns.t = s.t %}{% endif %}
+            {% endfor %}
+            {{ ns.t }}
+          # Cheapest contiguous block from now on, for each wanted length:
+          # [{start, end, avg, avg_now, saving, hours}, ...] in the order
+          # machines, car. {} where fewer quarter hours are published than
+          # the block needs. avg_now is what starting right now would cost on
+          # average over the same length.
+          win: >-
+            {% set ps = slots | map(attribute='p') | list %}
+            {% set ns = namespace(o=[]) %}
+            {% for h in [hours_machines, hours_car] %}
+              {% set n = h * 4 %}
+              {% if ps | length >= n %}
+                {% set b = namespace(i=0, s=none) %}
+                {% for i in range((ps | length) - n + 1) %}
+                  {% set s = ps[i:i + n] | sum %}
+                  {% if b.s is none or s < b.s %}{% set b.i = i %}{% set b.s = s %}{% endif %}
+                {% endfor %}
+                {% set start = as_datetime(slots[b.i].t) %}
+                {% set avg = b.s / n %}
+                {% set avg_now = (ps[0:n] | sum) / n %}
+                {% set ns.o = ns.o + [{
+                  'start': start.isoformat(),
+                  'end': (start + timedelta(minutes=15 * n)).isoformat(),
+                  'avg': avg | round(2),
+                  'avg_now': avg_now | round(2),
+                  'saving': (((avg_now - avg) / avg_now) * 100) | round(0) | int if avg_now > 0 else 0,
+                  'hours': h}] %}
+              {% else %}
+                {% set ns.o = ns.o + [{}] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.o }}
+          # 24-character colour strips, one emoji per clock hour: [today,
+          # tomorrow]. Tomorrow is '' until published.
+          levels: >-
+            {% macro strip(day, idx) -%}
+              {%- set l = lim[idx] -%}
+              {%- if l[0] is not none -%}
+                {%- for h in range(24) -%}
+                  {%- set q = namespace(p=[]) -%}
+                  {%- set pre = day ~ 'T' ~ ('%02d' % h) -%}
+                  {%- for r in rows if r.start_time[:13] == pre -%}
+                    {%- set q.p = q.p + [r.price] -%}
+                  {%- endfor -%}
+                  {%- if q.p -%}
+                    {%- set a = (q.p | sum) / (q.p | length) -%}
+                    {{- '🟢' if a <= l[0] else ('🔴' if a >= l[1] else '🟡') -}}
+                  {%- else -%}⚪{%- endif -%}
+                {%- endfor -%}
+              {%- endif -%}
+            {%- endmacro %}
+            {{ [strip(today, 0) | trim, strip(tomorrow, 1) | trim] }}
+
+    sensor:
+      - name: "Electricity price rating"
+        unique_id: electricity_price_rating
+        icon: mdi:cash-clock
+        state: "{{ now_level }}"
+        availability: "{{ now_p is defined and now_p is not none }}"
+        attributes:
+          price_now: "{{ now_p }}"
+          cheap_below: "{{ lim[0][0] }}"
+          expensive_above: "{{ lim[0][1] }}"
+          next_change_at: "{{ next_change.t | default('') if next_change else '' }}"
+          next_change_level: "{{ next_change.level | default('') if next_change else '' }}"
+          next_cheap_at: "{{ next_cheap }}"
+          levels_today: "{{ levels[0] }}"
+          levels_tomorrow: "{{ levels[1] }}"
+
+      - name: "Cheapest window machines"
+        unique_id: cheapest_window_machines
+        icon: mdi:washing-machine
+        device_class: timestamp
+        state: "{{ win[0].start if win[0] else none }}"
+        availability: "{{ (win | default([{}, {}]))[0] | length > 0 }}"
+        attributes:
+          ends_at: "{{ win[0].end }}"
+          hours: "{{ win[0].hours }}"
+          avg_price: "{{ win[0].avg }}"
+          avg_price_if_started_now: "{{ win[0].avg_now }}"
+          saving_pct: "{{ win[0].saving }}"
+
+      - name: "Cheapest window car"
+        unique_id: cheapest_window_car
+        icon: mdi:car-electric
+        device_class: timestamp
+        state: "{{ win[1].start if win[1] else none }}"
+        availability: "{{ (win | default([{}, {}]))[1] | length > 0 }}"
+        attributes:
+          ends_at: "{{ win[1].end }}"
+          hours: "{{ win[1].hours }}"
+          avg_price: "{{ win[1].avg }}"
+          avg_price_if_started_now: "{{ win[1].avg_now }}"
+          saving_pct: "{{ win[1].saving }}"

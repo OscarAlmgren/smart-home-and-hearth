@@ -31,6 +31,16 @@ mkdir -p "$RUNTIME_DIR/dashboards"
 rm -f "$RUNTIME_DIR/dashboards"/*.yaml
 cp -f "$REPO_DIR/config/dashboards/"*.yaml "$RUNTIME_DIR/dashboards/"
 
+# Git-owned blueprints: config/blueprints/<domain>/<namespace>/<name>.yaml.
+# Copied file by file and the target is NOT cleared, so blueprints imported
+# through the HA UI (blueprints/<domain>/<other-namespace>/) survive a restart.
+for f in "$REPO_DIR"/config/blueprints/*/*/*.yaml; do
+  [ -e "$f" ] || continue
+  rel="${f#"$REPO_DIR"/config/blueprints/}"
+  mkdir -p "$RUNTIME_DIR/blueprints/$(dirname "$rel")"
+  cp -f "$f" "$RUNTIME_DIR/blueprints/$rel"
+done
+
 # Home Assistant's UI editors WRITE these files. Copying over them on every
 # restart would silently delete every automation, script and scene created
 # through the UI. Seed them only if absent (-n = no clobber).
