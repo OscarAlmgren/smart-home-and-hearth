@@ -23,6 +23,12 @@ logger:
     zigpy: warning
     bellows: warning
 
+    # Google Cast. The TV closes its Cast connection whenever it idles or goes
+    # to standby, and pychromecast logs every reset as an ERROR (about 20 per
+    # hour on 2026-11-17), which drowns the Grafana error panel. It reconnects
+    # by itself, so only this one logger is silenced; casting still works.
+    pychromecast.socket_client: critical
+
     # Recorder — surfaces database connection failures and slow purges, which
     # matter given the disk constraints.
     homeassistant.components.recorder: info
