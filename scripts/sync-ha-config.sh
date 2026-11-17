@@ -25,6 +25,12 @@ mkdir -p "$RUNTIME_DIR/packages"
 rm -f "$RUNTIME_DIR/packages"/*.yaml
 cp -f "$REPO_DIR/config/packages/"*.yaml "$RUNTIME_DIR/packages/"
 
+# YAML-mode dashboards, referenced from packages/*.yaml via `lovelace:`. Same
+# clear-then-copy rule as packages/, for the same reason.
+mkdir -p "$RUNTIME_DIR/dashboards"
+rm -f "$RUNTIME_DIR/dashboards"/*.yaml
+cp -f "$REPO_DIR/config/dashboards/"*.yaml "$RUNTIME_DIR/dashboards/"
+
 # Home Assistant's UI editors WRITE these files. Copying over them on every
 # restart would silently delete every automation, script and scene created
 # through the UI. Seed them only if absent (-n = no clobber).

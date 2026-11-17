@@ -1,0 +1,143 @@
+# Electricity monitoring: NexBlue charger (garaget, circuit fuse 16 A, 3-phase)
+# and Tibber (price + whole-house consumption/cost).
+#
+# What this adds on top of the two integrations:
+#   * charger capacity (kW available from the circuit fuse) and total current,
+#   * an estimated running cost for the charger (SEK) with daily/monthly totals,
+#   * today's price level as a 0-100 % position inside today's min..max,
+#   * Tibber's monthly peak hour as a kW sensor that actually keeps statistics
+#     (the source sensor has no state_class, so HA records nothing for it).
+# The dashboard that displays these is dashboards/energi.yaml.
+#
+# Entity IDs below are the ones the NexBlue and Tibber integrations created on
+# 2026-11-17. If the charger is ever re-added they change - grep for
+# e2eflgqppz.
+#
+# Scope limits worth knowing:
+#   * Everything charger-related describes the CHARGER CIRCUIT only. Whole-house
+#     current/power needs a live meter (Tibber Pulse, HAN/P1 reader, Shelly
+#     3EM); Tibber's own statistics are hourly and about a day late.
+#   * Charger cost is power x current Tibber price, integrated over time. It is
+#     an estimate. Tibber's own hourly cost (in the Energy panel) is the
+#     authoritative whole-house figure, and the car is already inside it.
+
+template:
+  - sensor:
+      - name: "EV charger total current"
+        unique_id: ev_charger_total_current
+        unit_of_measurement: A
+        device_class: current
+        state_class: measurement
+        state: >
+          {{ (states('sensor.garaget_e2eflgqppz_strom_l1') | float(0)
+            + states('sensor.garaget_e2eflgqppz_strom_l2') | float(0)
+            + states('sensor.garaget_e2eflgqppz_strom_l3') | float(0)) | round(2) }}
+        availability: >
+          {{ has_value('sensor.garaget_e2eflgqppz_strom_l1')
+             and has_value('sensor.garaget_e2eflgqppz_strom_l2')
+             and has_value('sensor.garaget_e2eflgqppz_strom_l3') }}
+
+      # kW the circuit can deliver: fuse rating x sum of phase voltages when the
+      # charger is three-phase, one phase otherwise. This is the "y" in "x kW
+      # of y kW". It follows the fuse setting from the NexBlue app, so changing
+      # the fuse there updates it here.
+      - name: "EV charger capacity"
+        unique_id: ev_charger_capacity
+        unit_of_measurement: kW
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set fuse = states('sensor.garaget_e2eflgqppz_kretssakring') | float(0) %}
+          {% set v1 = states('sensor.garaget_e2eflgqppz_spanning_l1') | float(0) %}
+          {% set v2 = states('sensor.garaget_e2eflgqppz_spanning_l2') | float(0) %}
+          {% set v3 = states('sensor.garaget_e2eflgqppz_spanning_l3') | float(0) %}
+          {% set volts = (v1 + v2 + v3) if is_state('sensor.garaget_e2eflgqppz_fasladdning', 'three_phase') else v1 %}
+          {{ (volts * fuse / 1000) | round(2) }}
+        availability: >
+          {{ has_value('sensor.garaget_e2eflgqppz_kretssakring')
+             and has_value('sensor.garaget_e2eflgqppz_spanning_l1') }}
+
+      # SEK per hour at the current price. Only exists to be integrated below.
+      - name: "EV charger cost rate"
+        unique_id: ev_charger_cost_rate
+        unit_of_measurement: "SEK/h"
+        state_class: measurement
+        state: >
+          {{ (states('sensor.garaget_e2eflgqppz_effekt') | float(0)
+              * states('sensor.henrybook_hermod_elpris') | float(0)) | round(3) }}
+        availability: >
+          {{ has_value('sensor.garaget_e2eflgqppz_effekt')
+             and has_value('sensor.henrybook_hermod_elpris') }}
+
+      # 0 % = the cheapest price of the day, 100 % = the dearest. Tibber's
+      # min_price/max_price attributes are the day's range.
+      - name: "Electricity price level"
+        unique_id: electricity_price_level
+        unit_of_measurement: "%"
+        state_class: measurement
+        state: >
+          {% set p = states('sensor.henrybook_hermod_elpris') | float(0) %}
+          {% set lo = state_attr('sensor.henrybook_hermod_elpris', 'min_price') | float(0) %}
+          {% set hi = state_attr('sensor.henrybook_hermod_elpris', 'max_price') | float(0) %}
+          {{ (((p - lo) / (hi - lo)) * 100) | round(0) }}
+        availability: >
+          {{ has_value('sensor.henrybook_hermod_elpris')
+             and (state_attr('sensor.henrybook_hermod_elpris', 'max_price') | float(0))
+               > (state_attr('sensor.henrybook_hermod_elpris', 'min_price') | float(0)) }}
+
+      # Tibber reports the kWh used in the month's busiest hour; one kWh in one
+      # hour is an average of one kW, so the same number is the peak in kW. This
+      # is the figure an effekttariff is based on. Check your grid company's
+      # exact rule (many average the top three hours) before relying on it.
+      - name: "Monthly peak hour power"
+        unique_id: monthly_peak_hour_power
+        unit_of_measurement: kW
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ states('sensor.henrybook_hermod_manatlig_forbrukning_under_maxtimmen') | float(0) }}
+        availability: >
+          {{ has_value('sensor.henrybook_hermod_manatlig_forbrukning_under_maxtimmen') }}
+
+sensor:
+  # Running estimate of what the charger has cost. max_sub_interval keeps it
+  # integrating once a minute while power and price are steady, rather than
+  # only when one of them changes. Entity: sensor.ev_charger_cost.
+  - platform: integration
+    source: sensor.ev_charger_cost_rate
+    name: "EV charger cost"
+    unique_id: ev_charger_cost
+    unit_time: h
+    method: left
+    round: 2
+    max_sub_interval:
+      minutes: 1
+
+# Entity IDs are sensor.<key>.
+utility_meter:
+  ev_charger_energy_daily:
+    name: "EV charger energy daily"
+    source: sensor.garaget_e2eflgqppz_livstid_energi
+    cycle: daily
+  ev_charger_energy_monthly:
+    name: "EV charger energy monthly"
+    source: sensor.garaget_e2eflgqppz_livstid_energi
+    cycle: monthly
+  ev_charger_cost_daily:
+    name: "EV charger cost daily"
+    source: sensor.ev_charger_cost
+    cycle: daily
+  ev_charger_cost_monthly:
+    name: "EV charger cost monthly"
+    source: sensor.ev_charger_cost
+    cycle: monthly
+
+lovelace:
+  dashboards:
+    energi-el:
+      mode: yaml
+      filename: dashboards/energi.yaml
+      title: Energi
+      icon: mdi:flash
+      show_in_sidebar: true
+      require_admin: false

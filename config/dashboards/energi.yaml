@@ -1,0 +1,200 @@
+# YAML-mode dashboard, registered in packages/energy.yaml (url: /energi-el).
+# Git owns this file; edits made in the UI editor are not possible in YAML mode.
+#
+# Fuse values are written as static numbers because the gauge card cannot read
+# its max from an entity: the charger circuit is 16 A / 3-phase (11 kW). If the
+# fuse changes in the NexBlue app, update `max` on the gauges below. The
+# markdown card reads the live fuse value, so it will show the mismatch.
+title: Energi
+views:
+  - title: Laddbox
+    path: laddbox
+    icon: mdi:ev-station
+    cards:
+      - type: gauge
+        entity: sensor.garaget_e2eflgqppz_effekt
+        name: Charger power
+        unit: kW
+        min: 0
+        max: 11
+        needle: true
+        severity: { green: 0, yellow: 6.6, red: 9.4 }
+
+      - type: markdown
+        title: Circuit
+        content: >
+          **{{ states('sensor.garaget_e2eflgqppz_effekt') | float(0) | round(1) }} kW**
+          of {{ states('sensor.ev_charger_capacity') }} kW available
+
+          **{{ states('sensor.ev_charger_total_current') }} A** total across
+          three phases, fuse
+          {{ states('sensor.garaget_e2eflgqppz_kretssakring') }} A per phase,
+          charge limit {{ states('sensor.garaget_e2eflgqppz_stromgrans') }} A,
+          cable rated {{ states('sensor.garaget_e2eflgqppz_kabelklassning') }} A
+
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.garaget_e2eflgqppz_strom_l1
+            name: L1
+            min: 0
+            max: 16
+            needle: true
+            severity: { green: 0, yellow: 10, red: 14 }
+          - type: gauge
+            entity: sensor.garaget_e2eflgqppz_strom_l2
+            name: L2
+            min: 0
+            max: 16
+            needle: true
+            severity: { green: 0, yellow: 10, red: 14 }
+          - type: gauge
+            entity: sensor.garaget_e2eflgqppz_strom_l3
+            name: L3
+            min: 0
+            max: 16
+            needle: true
+            severity: { green: 0, yellow: 10, red: 14 }
+
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.garaget_e2eflgqppz_spanning_l1
+            name: L1 volt
+            min: 207
+            max: 253
+          - type: gauge
+            entity: sensor.garaget_e2eflgqppz_spanning_l2
+            name: L2 volt
+            min: 207
+            max: 253
+          - type: gauge
+            entity: sensor.garaget_e2eflgqppz_spanning_l3
+            name: L3 volt
+            min: 207
+            max: 253
+
+      # The fuse rating is plotted as a flat line so headroom is visible.
+      - type: history-graph
+        title: Phase current vs fuse (24 h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.garaget_e2eflgqppz_strom_l1
+          - entity: sensor.garaget_e2eflgqppz_strom_l2
+          - entity: sensor.garaget_e2eflgqppz_strom_l3
+          - entity: sensor.garaget_e2eflgqppz_kretssakring
+            name: Fuse rating
+
+      - type: history-graph
+        title: Charger power (24 h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.garaget_e2eflgqppz_effekt
+
+      - type: entities
+        title: Charged and cost
+        entities:
+          - entity: sensor.ev_charger_energy_daily
+            name: Charged today
+          - entity: sensor.ev_charger_energy_monthly
+            name: Charged this month
+          - entity: sensor.ev_charger_cost_daily
+            name: Cost today (estimate)
+          - entity: sensor.ev_charger_cost_monthly
+            name: Cost this month (estimate)
+          - entity: sensor.garaget_e2eflgqppz_livstid_energi
+            name: Lifetime
+
+      - type: entities
+        title: Charger status
+        entities:
+          - entity: switch.garaget_e2eflgqppz_laddar
+          - entity: sensor.garaget_e2eflgqppz_laddningsstatus
+          - entity: sensor.garaget_e2eflgqppz_kabellaslage
+          - entity: sensor.garaget_e2eflgqppz_fasladdning
+          - entity: sensor.garaget_e2eflgqppz_natverksstatus
+
+      - type: statistics-graph
+        title: Charged per day (30 days)
+        chart_type: bar
+        period: day
+        days_to_show: 30
+        stat_types: [change]
+        entities:
+          - sensor.garaget_e2eflgqppz_livstid_energi
+
+      - type: statistics-graph
+        title: Charger cost per day (30 days, estimate)
+        chart_type: bar
+        period: day
+        days_to_show: 30
+        stat_types: [change]
+        entities:
+          - sensor.ev_charger_cost
+
+  - title: Hela huset
+    path: huset
+    icon: mdi:home-lightning-bolt
+    cards:
+      - type: energy-date-selection
+
+      - type: energy-usage-graph
+
+      - type: energy-sources-table
+
+      - type: energy-devices-graph
+
+      - type: gauge
+        entity: sensor.electricity_price_level
+        name: Price now vs today's range
+        min: 0
+        max: 100
+        severity: { green: 0, yellow: 40, red: 75 }
+
+      - type: entities
+        title: Price and peak
+        entities:
+          - entity: sensor.henrybook_hermod_elpris
+            name: Price now
+          - entity: sensor.monthly_peak_hour_power
+            name: Peak hour this month
+          - entity: sensor.henrybook_hermod_tidpunkt_for_maximal_timforbrukning
+            name: Peak hour was at
+          - entity: sensor.henrybook_hermod_manadskostnad
+            name: Cost this month (Tibber)
+          - entity: sensor.henrybook_hermod_manatlig_nettoforbrukning
+            name: Consumption this month (Tibber)
+
+      - type: history-graph
+        title: Electricity price (48 h)
+        hours_to_show: 48
+        entities:
+          - sensor.henrybook_hermod_elpris
+
+      # Tibber's imported statistics: hourly, back to 2026-04-01, ~1 day behind.
+      - type: statistics-graph
+        title: Consumption per day (Tibber, 30 days)
+        chart_type: bar
+        period: day
+        days_to_show: 30
+        stat_types: [change]
+        entities:
+          - tibber:energy_consumption_586bf79bfa264f8497a13a71374ff7ee
+
+      - type: statistics-graph
+        title: Cost per day (Tibber, 30 days)
+        chart_type: bar
+        period: day
+        days_to_show: 30
+        stat_types: [change]
+        entities:
+          - tibber:energy_totalcost_586bf79bfa264f8497a13a71374ff7ee
+
+      - type: statistics-graph
+        title: Peak hour per month (kW)
+        chart_type: line
+        period: day
+        days_to_show: 90
+        stat_types: [max]
+        entities:
+          - sensor.monthly_peak_hour_power
