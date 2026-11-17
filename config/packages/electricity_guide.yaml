@@ -183,8 +183,44 @@ template:
               {%- endif -%}
             {%- endmacro %}
             {{ [strip(today, 0) | trim, strip(tomorrow, 1) | trim] }}
+          # Whole price series for the chart: p = [[epoch_ms, öre/kWh], ...] for
+          # every published quarter hour (today from 00:00, tomorrow once
+          # published); lv = one letter per quarter hour (c cheap, n normal,
+          # e expensive) rated against that quarter hour's own day. Letters, not
+          # digits: a digit string would be parsed as a number.
+          chart: >-
+            {% set ns = namespace(p=[], lv='') %}
+            {% for r in rows %}
+              {% set l = lim[0] if r.start_time[:10] == today else lim[1] %}
+              {% set ns.p = ns.p + [[(as_datetime(r.start_time).timestamp() * 1000) | int, (r.price * 100) | round(1)]] %}
+              {% set ns.lv = ns.lv ~ ('n' if l[0] is none else ('c' if r.price <= l[0] else ('e' if r.price >= l[1] else 'n'))) %}
+            {% endfor %}
+            {{ {'p': ns.p, 'lv': ns.lv} }}
+          # Day averages in öre/kWh, none if the day is not published.
+          avg_today: >-
+            {% set q = namespace(s=0, n=0) %}
+            {% for r in rows if r.start_time[:10] == today %}{% set q.s = q.s + r.price %}{% set q.n = q.n + 1 %}{% endfor %}
+            {{ ((q.s / q.n) * 100) | round(0) | int if q.n else none }}
+          avg_tomorrow: >-
+            {% set q = namespace(s=0, n=0) %}
+            {% for r in rows if r.start_time[:10] == tomorrow %}{% set q.s = q.s + r.price %}{% set q.n = q.n + 1 %}{% endfor %}
+            {{ ((q.s / q.n) * 100) | round(0) | int if q.n else none }}
 
     sensor:
+      # Feeds the price chart on dashboards/elpris.yaml. State is the current
+      # price in öre/kWh (what the Tibber app shows); the series is an attribute.
+      - name: "Electricity price forecast"
+        unique_id: electricity_price_forecast
+        icon: mdi:chart-line
+        unit_of_measurement: "öre/kWh"
+        state: "{{ (now_p * 100) | round(0) | int if now_p is not none else none }}"
+        availability: "{{ (chart | default({})).get('p', []) | length > 0 }}"
+        attributes:
+          prices: "{{ chart.p }}"
+          levels: "{{ chart.lv }}"
+          avg_today: "{{ avg_today }}"
+          avg_tomorrow: "{{ avg_tomorrow }}"
+
       - name: "Electricity price rating"
         unique_id: electricity_price_rating
         icon: mdi:cash-clock
