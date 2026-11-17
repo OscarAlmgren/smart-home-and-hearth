@@ -1,0 +1,24 @@
+# Size cap for Home Assistant's own log file.
+#
+# HA rotates home-assistant.log only when it starts (keeping one .1 copy), so a
+# noisy integration can grow it without limit between restarts. Everything HA
+# writes also goes to the systemd journal, which is capped separately
+# (SystemMaxUse=200M) and shipped to Loki by Alloy; this file is what the HA UI
+# shows under Settings > System > Logs.
+#
+# Install on henrybook:
+#   sudo install -m 644 -o root -g root logrotate-homeassistant /etc/logrotate.d/homeassistant
+#   sudo logrotate -d /etc/logrotate.d/homeassistant     # dry run
+#
+# copytruncate: HA keeps the file open, so rotate by copying and truncating
+# instead of renaming; no HA restart needed. logrotate runs daily from the
+# logrotate.timer, so "size" is checked once a day.
+/var/lib/smart-home-and-hearth/ha-config/home-assistant.log {
+    size 20M
+    rotate 3
+    copytruncate
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
