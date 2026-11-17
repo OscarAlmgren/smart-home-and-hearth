@@ -1330,7 +1330,7 @@
       },
       "type": "logs",
       "title": "Home Assistant: errors",
-      "description": "Errors from the homeassistant.service journal.",
+      "description": "HA log lines at ERROR or CRITICAL level. Matched on the text, not the level label: the container writes to stderr, so the journal marks every HA line as 'error'. Cast connection resets from the TV are excluded.",
       "datasource": {
         "type": "loki",
         "uid": "${DS_LOKI}"
@@ -1342,7 +1342,7 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "{instance=\"henrybook\",unit=\"homeassistant.service\"} |~ \"(?i)error|exception|critical\"",
+          "expr": "{instance=\"henrybook\",unit=\"homeassistant.service\"} |~ \" (ERROR|CRITICAL) [(]\" != \"pychromecast.socket_client\"",
           "queryType": "range"
         }
       ],
