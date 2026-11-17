@@ -1,0 +1,50 @@
+// Home Assistant metrics -> Grafana Cloud.
+//
+// APPEND this file to /etc/alloy/config.alloy on henrybook (it reuses the
+// prometheus.remote_write "metrics_service" that the Grafana install guide
+// already put there), then `sudo systemctl reload alloy`.
+//
+// Differences from the snippet in Grafana's Home Assistant integration page:
+//   * scheme is "http": HA serves plain HTTP on :8123 on this host, https would
+//     fail the TLS handshake.
+//   * the HA token is read from /etc/alloy/ha_token (root:alloy, mode 640)
+//     instead of being pasted into this file, so the config stays free of
+//     secrets and safe to keep in git.
+//
+// Series budget: /api/prometheus returned ~1,340 series on 2026-11-17, filtered
+// by config/packages/prometheus.yaml. The free tier allows 10,000 per stack,
+// shared with every other machine that pushes to it.
+
+discovery.relabel "metrics_integrations_integrations_hass" {
+  targets = [{
+    __address__ = "localhost:8123",
+  }]
+
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+prometheus.scrape "metrics_integrations_integrations_hass" {
+  targets      = discovery.relabel.metrics_integrations_integrations_hass.output
+  forward_to   = [prometheus.remote_write.metrics_service.receiver]
+  job_name     = "integrations/hass"
+  metrics_path = "/api/prometheus"
+  scheme       = "http"
+
+  authorization {
+    type             = "Bearer"
+    credentials_file = "/etc/alloy/ha_token"
+  }
+}
+
+// OPTIONAL, separate from the scrape above, and only allowed once in the whole
+// config: keep Alloy's own log quiet. The journal is shipped to Loki, so
+// Alloy's info-level chatter would otherwise be shipped back to Loki too. Add
+// it once everything works; while setting up, the default (info) is useful.
+//
+// logging {
+//   level  = "warn"
+//   format = "logfmt"
+// }
